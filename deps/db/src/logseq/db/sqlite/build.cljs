@@ -401,7 +401,8 @@
                        {:db/ident ident :block/order order}))))]
     (into new-properties-tx existing-property-orders-tx)))
 
-(defn- build-class-extends [{:build/keys [class-parent class-extends]} class-db-ids]
+(defn- build-class-extends
+  [{:build/keys [class-parent class-extends]} class-db-ids all-idents]
   (when-let [class-extends' (if class-parent
                               (do (println "Warning: :build/class-parent is deprecated and will be removed soon.")
                                   [class-parent])
@@ -409,7 +410,7 @@
     (mapv (fn [c]
             (or (class-db-ids c)
                 (if (db-malli-schema/class? c)
-                  c
+                  (get-ident all-idents c)
                   (throw (ex-info (str "No :db/id for " c) {})))))
           class-extends')))
 
@@ -447,7 +448,7 @@
                              (when-let [props (not-empty (:build/properties class-m))]
                                (->block-properties (merge props (db-property-build/build-properties-with-ref-values pvalue-tx-m))
                                                    uuid-maps all-idents options))
-                             (when-let [class-extends (build-class-extends class-m class-db-ids)]
+                             (when-let [class-extends (build-class-extends class-m class-db-ids all-idents)]
                                {:logseq.property.class/extends class-extends})
                              (when class-properties
                                {:logseq.property.class/properties

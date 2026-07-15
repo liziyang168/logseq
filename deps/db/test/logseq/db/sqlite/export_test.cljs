@@ -1487,13 +1487,16 @@
 (deftest build-import-reuses-existing-class-identities
   (let [target-class-ident :user.class/existing-target
         source-class-ident :user.class/existing-source
+        child-class-ident :user.class/child
         conn (db-test/create-conn-with-blocks
               {:classes {target-class-ident {:block/title "Existing class"}}})]
     (with-redefs [db-ident/create-db-ident-from-name
                   (fn [class-namespace class-name]
                     (keyword class-namespace (str class-name "-new")))]
       (let [txs (sqlite-export/build-import
-                 {:classes {source-class-ident {:block/title "Existing class"}}
+                 {:classes {source-class-ident {:block/title "Existing class"}
+                            child-class-ident {:block/title "Child class"
+                                               :build/class-extends [source-class-ident]}}
                   :pages-and-blocks
                   [{:page {:block/title "Imported page"
                            :build/tags #{source-class-ident}}}]}
@@ -1505,7 +1508,10 @@
                 (keep :db/ident)
                 (filter #(= "user.class" (namespace %)))
                 set)))
-    (is (= 1 (count (ldb/page-exists? @conn "Existing class" [:logseq.class/Tag]))))))
+    (is (= 1 (count (ldb/page-exists? @conn "Existing class" [:logseq.class/Tag]))))
+    (is (= #{target-class-ident}
+           (set (map :db/ident
+                     (:logseq.property.class/extends (d/entity @conn child-class-ident))))))))
 
 (deftest build-import-preserves-existing-page-properties
   (let [existing-text-ident :user.property/existing-text-source
