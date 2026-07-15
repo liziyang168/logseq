@@ -1451,20 +1451,30 @@
                                 :logseq.property/exclude-from-graph-view true})))
 
 (deftest build-import-preserves-existing-page-properties
-  (let [existing-text-ident :user.property/existing-text-source
-        existing-checkbox-ident :user.property/existing-checkbox-source
-        conn (db-test/create-conn-with-blocks
-              {:properties
-               {existing-text-ident {:block/title "existing-text"
-                                     :logseq.property/type :default
-                                     :db/cardinality :db.cardinality/one}
-                existing-checkbox-ident {:block/title "existing-checkbox"
-                                         :logseq.property/type :checkbox
-                                         :db/cardinality :db.cardinality/one}}
-               :pages-and-blocks
-               [{:page {:block/title "Existing page"
-                        :build/properties {existing-text-ident "Existing"
-                                           existing-checkbox-ident false}}}]})
+  (let [existing-text-ident :user.property/existing-text
+        existing-checkbox-ident :user.property/existing-checkbox
+        conn (sqlite-export/create-conn)
+        preparation-data
+        {:properties
+         {existing-text-ident {:logseq.property/type :default
+                               :db/cardinality :db.cardinality/one}
+          existing-checkbox-ident {:logseq.property/type :checkbox
+                                   :db/cardinality :db.cardinality/one}
+          :user.property/imported-text {:logseq.property/type :default
+                                        :db/cardinality :db.cardinality/one}}
+         :pages-and-blocks
+         [{:page {:block/title "Existing property probe"
+                  :build/properties {existing-text-ident "Existing"
+                                     existing-checkbox-ident false}}}]}
+        preparation-validation
+        (sqlite-export/validate-import-txs
+         (sqlite-export/build-import
+          preparation-data @conn {:existing-pages-keep-properties? true
+                                  :import-edn-data? true})
+         @conn
+         {:import-edn-data? true})
+        _ (is (nil? (:error preparation-validation)))
+        _ (d/transact! conn (:tx-data preparation-validation))
         import-data
         {:properties {:existing-text {:logseq.property/type :default
                                       :db/cardinality :db.cardinality/one}
@@ -1473,7 +1483,7 @@
                       :imported-text {:logseq.property/type :default
                                       :db/cardinality :db.cardinality/one}}
          :pages-and-blocks
-         [{:page {:block/title "Existing page"
+         [{:page {:block/title "Existing property probe"
                   :build/properties {:existing-text "Imported"
                                      :existing-checkbox true
                                      :imported-text "Added"}}
@@ -1482,7 +1492,7 @@
              import-data @conn {:existing-pages-keep-properties? true
                                 :import-edn-data? true})]
     (d/transact! conn (sqlite-export/import-tx-data txs))
-    (let [page (db-test/find-page-by-title @conn "Existing page")
+    (let [page (db-test/find-page-by-title @conn "Existing property probe")
           properties' (db-test/readable-properties page)]
       (is (= "Existing" (get properties' existing-text-ident)))
       (is (false? (get properties' existing-checkbox-ident)))
