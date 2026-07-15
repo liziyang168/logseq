@@ -1362,6 +1362,7 @@
          [{:page {:block/title "page1"
                   :build/properties {:user.property/node
                                      #{[:build/page {:block/title "existing page"
+                                                     :block/created-at 100
                                                      :build/properties {:logseq.property/description "first description"}}]}}}}]}
         conn (db-test/create-conn-with-blocks original-data)
         page-uuid (:block/uuid (db-test/find-page-by-title @conn "existing page"))
@@ -1374,6 +1375,7 @@
          :pages-and-blocks
          [{:page {:block/title "existing page"
                   :block/uuid temp-uuid
+                  :block/created-at 900
                   :build/keep-uuid? true
                   :build/properties {:logseq.property/description "second description"
                                      :logseq.property/exclude-from-graph-view true}}}
@@ -1389,6 +1391,7 @@
         page1 (db-test/find-page-by-title @conn "page1")
         page2 (db-test/find-page-by-title @conn "page2")]
     (is (= page-uuid (:block/uuid existing-page)))
+    (is (= 900 (:block/created-at existing-page)))
     (is (= expected-page-properties
            (select-keys (db-test/readable-properties existing-page)
                         (keys expected-page-properties))))
@@ -1432,7 +1435,8 @@
                                      :imported-text "Added"}}
            :blocks [{:block/title "Imported child"}]}]}
         txs (sqlite-export/build-import
-             import-data @conn {:existing-pages-keep-properties? true})]
+             import-data @conn {:existing-pages-keep-properties? true
+                                :import-edn-data? true})]
     (d/transact! conn (sqlite-export/import-tx-data txs))
     (let [page (db-test/find-page-by-title @conn "Existing page")
           properties' (db-test/readable-properties page)]
@@ -1519,7 +1523,8 @@
         import! (fn [now]
                   (with-redefs [common-util/time-ms (constantly now)]
                     (let [txs (sqlite-export/build-import
-                               import-data @conn {:existing-pages-keep-properties? true})]
+                               import-data @conn {:existing-pages-keep-properties? true
+                                                  :import-edn-data? true})]
                       (d/transact! conn (sqlite-export/import-tx-data txs)))))]
     (import! 500)
     (let [page (db-test/find-journal-by-journal-day @conn 20250101)]
@@ -1578,7 +1583,8 @@
                (assoc-in alias-pages [0 :page :block/uuid] source-existing-alias-uuid))}]
     (with-redefs [common-util/time-ms (constantly 700)]
       (let [txs (sqlite-export/build-import
-                 import-data @conn {:existing-pages-keep-properties? true})]
+                 import-data @conn {:existing-pages-keep-properties? true
+                                    :import-edn-data? true})]
         (d/transact! conn (sqlite-export/import-tx-data txs))))
     (let [page (db-test/find-page-by-title @conn "Existing page")
           tags (->> (:block/tags page)

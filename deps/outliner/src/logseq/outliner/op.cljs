@@ -108,7 +108,7 @@
    [:batch-import-edn
     [:catn
      [:op :keyword]
-     [:args [:tuple ::import-edn ::option]]]]
+     [:args [:tuple ::import-edn ::import-options]]]]
 
    ;; transact
    [:transact
@@ -162,6 +162,19 @@
                        ::values [:sequential ::value]
                        ::option [:maybe map?]
                        ::import-edn map?
+                       ::import-current-block
+                       [:map {:closed true}
+                        [:block/uuid ::uuid]
+                        [:block/page
+                         [:map {:closed true}
+                          [:block/uuid ::uuid]]]]
+                       ::import-options
+                       [:maybe
+                        [:map {:closed true}
+                         [:current-block {:optional true} ::import-current-block]
+                         [:existing-pages-keep-properties? {:optional true} :boolean]
+                         [:import-edn-data? {:optional true} :boolean]
+                         [:tx-meta {:optional true} map?]]]
                        ::blocks [:sequential ::block]
                        ::uuid uuid?
                        ::title string?

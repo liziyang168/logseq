@@ -1176,7 +1176,7 @@
       (record-page-uuid! import-to-existing-page-uuids (:block/uuid m) (:block/uuid ent))
       (let [existing-tag-idents (set (keep :db/ident (:block/tags ent)))
             existing-alias-uuids (set (map :block/uuid (:block/alias ent)))
-            page (if existing-pages-keep-properties?
+            page (if import-edn-data?
                    (-> (apply dissoc m existing-page-protected-attributes)
                        (merge (select-keys ent existing-page-preserved-attributes))
                        (assoc :block/uuid (:block/uuid ent)))
@@ -1188,12 +1188,12 @@
                                                      (remove (fn [[k _v]]
                                                                (contains? ent (get all-idents k k))))
                                                      (into {}))))
-                    (and (:build/tags page) existing-pages-keep-properties?)
+                    (and (:build/tags page) import-edn-data?)
                     (update :build/tags
                             #(set (remove (fn [tag]
                                             (contains? existing-tag-idents
                                                        (get all-idents tag tag))) %)))
-                    (and (:block/alias page) existing-pages-keep-properties?)
+                    (and (:block/alias page) import-edn-data?)
                     (update :block/alias
                             #(set (remove (fn [[attr uuid]]
                                             (and (= :block/uuid attr)
@@ -1201,9 +1201,9 @@
                                                             (get @import-to-existing-page-uuids uuid uuid))))
                                           %))))]
         (cond-> page'
-          (empty? (:build/properties page')) (dissoc :build/properties)
-          (empty? (:build/tags page')) (dissoc :build/tags)
-          (empty? (:block/alias page')) (dissoc :block/alias))))
+          (and import-edn-data? (empty? (:build/properties page'))) (dissoc :build/properties)
+          (and import-edn-data? (empty? (:build/tags page'))) (dissoc :build/tags)
+          (and import-edn-data? (empty? (:block/alias page'))) (dissoc :block/alias))))
     m))
 
 (defn- update-existing-properties

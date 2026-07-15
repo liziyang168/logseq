@@ -13,12 +13,15 @@
   [request-f]
   (let [response (p/deferred)]
     (async/go
-      (let [result (<? (p->c (request-f)))]
-        (if (:ex-data result)
-          (do
-            (log/error :worker-request-failed result)
-            (p/reject! response result))
-          (p/resolve! response result))))
+      (try
+        (let [result (<? (p->c (request-f)))]
+          (if (or (instance? js/Error result) (:ex-data result))
+            (do
+              (log/error :worker-request-failed result)
+              (p/reject! response result))
+            (p/resolve! response result)))
+        (catch :default error
+          (p/reject! response (or (ex-cause error) error)))))
     response))
 
 (defn- ensure-local-op-tx-id
@@ -45,20 +48,22 @@
   (when (seq ops)
     (if util/node-test?
       (outliner-op/apply-ops! conn ops opts)
-      (let [opts' (-> opts
+      (let [repo (state/get-current-repo)
+            editor-info (state/get-editor-info)
+            opts' (-> opts
                       ensure-local-op-tx-id
                       (assoc
                        :client-id (:client-id @state/state)
                        :local-tx? true))
             request #(state/<invoke-db-worker
                       :thread-api/apply-outliner-ops
-                      (state/get-current-repo)
+                      repo
                       ops
                       opts')]
         (frontend.db.transact/worker-call
          (fn []
            (p/do!
             (state/<invoke-db-worker :thread-api/undo-redo-set-pending-editor-info
-                                     (state/get-current-repo)
-                                     (state/get-editor-info))
+                                     repo
+                                     editor-info)
             (request))))))))
