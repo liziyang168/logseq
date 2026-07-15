@@ -1199,14 +1199,14 @@
                                             (and (= :block/uuid attr)
                                                  (contains? existing-alias-uuids
                                                             (get @import-to-existing-page-uuids uuid uuid))))
-                                          %))))]
-        (let [page'' (cond-> page'
-                       (and import-edn-data? (empty? (:build/properties page'))) (dissoc :build/properties)
-                       (and import-edn-data? (empty? (:build/tags page'))) (dissoc :build/tags)
-                       (and import-edn-data? (empty? (:block/alias page'))) (dissoc :block/alias))]
-          (cond-> page''
-            (and import-edn-data? (:block/alias page''))
-            (vary-meta assoc ::sqlite-build/merge-existing-aliases? true)))))
+                                          %))))
+            page'' (cond-> page'
+                     (and import-edn-data? (empty? (:build/properties page'))) (dissoc :build/properties)
+                     (and import-edn-data? (empty? (:build/tags page'))) (dissoc :build/tags)
+                     (and import-edn-data? (empty? (:block/alias page'))) (dissoc :block/alias))]
+        (cond-> page''
+          (and import-edn-data? (:block/alias page''))
+          (vary-meta assoc ::sqlite-build/merge-existing-aliases? true))))
     m))
 
 (defn- update-existing-properties
