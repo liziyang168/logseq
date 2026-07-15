@@ -1200,10 +1200,13 @@
                                                  (contains? existing-alias-uuids
                                                             (get @import-to-existing-page-uuids uuid uuid))))
                                           %))))]
-        (cond-> page'
-          (and import-edn-data? (empty? (:build/properties page'))) (dissoc :build/properties)
-          (and import-edn-data? (empty? (:build/tags page'))) (dissoc :build/tags)
-          (and import-edn-data? (empty? (:block/alias page'))) (dissoc :block/alias))))
+        (let [page'' (cond-> page'
+                       (and import-edn-data? (empty? (:build/properties page'))) (dissoc :build/properties)
+                       (and import-edn-data? (empty? (:build/tags page'))) (dissoc :build/tags)
+                       (and import-edn-data? (empty? (:block/alias page'))) (dissoc :block/alias))]
+          (cond-> page''
+            (and import-edn-data? (:block/alias page''))
+            (vary-meta assoc ::sqlite-build/merge-existing-aliases? true)))))
     m))
 
 (defn- update-existing-properties
@@ -1551,8 +1554,9 @@
                    (seq eid->attrs)
                    (not= (count tx-data) (count tx-data')))
             (recur (vec tx-data'))
-            {:error (str "The " edn-label " has " (count errors) " validation error(s): "
-                         (validation-error-details errors))
+            {:error (str "The " edn-label " has " (count errors) " validation error(s)"
+                         (when import-edn-data?
+                           (str ": " (validation-error-details errors))))
              :errors errors}))
         (if (and import-edn-data? (empty? (:tx-data tx-report)))
           {:error "The imported EDN does not contain any importable data."}

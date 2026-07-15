@@ -653,14 +653,24 @@
         invalid-result (validate {:block/title "Unsupported attribute"
                                   unsupported-attr true})
         invalid-type-result (validate {:block/title "Invalid attribute"
-                                       :block/collapsed? "yes"})]
+                                       :block/collapsed? "yes"})
+        shared-result
+        (sqlite-export/validate-import-txs
+         (sqlite-export/build-import
+          {:pages-and-blocks
+           [{:page {:block/title "Shared validation"
+                    :block/collapsed? "yes"}}]}
+          @conn
+          {})
+         @conn)]
     (is (nil? (:error legacy-result)))
     (is (not-any? #(contains? % :hide?) (:tx-data legacy-result)))
     (is (not-any? #(contains? % :public?) (:tx-data legacy-result)))
     (is (string/includes? (:error invalid-result) "Unsupported attribute"))
     (is (string/includes? (:error invalid-result) (str unsupported-attr)))
     (is (string/includes? (:error invalid-type-result) ":block/collapsed?"))
-    (is (string/includes? (:error invalid-type-result) "should be a boolean"))))
+    (is (string/includes? (:error invalid-type-result) "should be a boolean"))
+    (is (= "The imported EDN has 1 validation error(s)" (:error shared-result)))))
 
 (deftest import-edn-data-rejects-unsupported-export-metadata
   (let [unsupported-key :logseq.db.sqlite.export/unsupported
@@ -1680,6 +1690,30 @@
       (is (= #{existing-alias-uuid}
              (set (map :block/uuid (:block/alias page)))))
       (is (= 200 (:block/updated-at page))))))
+
+(deftest build-import-keeps-alias-merge-specific-to-import-edn-data
+  (let [existing-alias-uuid (random-uuid)
+        imported-alias-uuid (random-uuid)
+        conn (db-test/create-conn-with-blocks
+              {:pages-and-blocks
+               [{:page {:block/title "Existing alias"
+                        :block/uuid existing-alias-uuid
+                        :build/keep-uuid? true}}
+                {:page {:block/title "Imported alias"
+                        :block/uuid imported-alias-uuid
+                        :build/keep-uuid? true}}
+                {:page {:block/title "Existing page"
+                        :block/alias #{[:block/uuid existing-alias-uuid]}}}]})
+        txs (sqlite-export/build-import
+             {:pages-and-blocks
+              [{:page {:block/title "Existing page"
+                       :block/alias #{[:block/uuid imported-alias-uuid]}}}]}
+             @conn
+             {})]
+    (d/transact! conn (sqlite-export/import-tx-data txs))
+    (is (= #{existing-alias-uuid}
+           (set (map :block/uuid
+                     (:block/alias (db-test/find-page-by-title @conn "Existing page"))))))))
 
 (deftest build-export-omits-empty-build-properties
   (let [conn (db-test/create-conn-with-blocks

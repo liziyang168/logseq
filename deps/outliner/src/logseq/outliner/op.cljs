@@ -220,9 +220,11 @@
   [conn *result export-map {:keys [tx-meta] :as import-options}]
   (let [{:keys [error] :as txs}
         (try (sqlite-export/build-import export-map @conn (dissoc import-options :tx-meta))
-             (catch :default e
-               (js/console.error "Import EDN error: " e)
-               {:error (str "Import EDN build failed: " (ex-message e))}))
+              (catch :default e
+                (js/console.error "Import EDN error: " e)
+               {:error (if (:import-edn-data? import-options)
+                         (str "Import EDN build failed: " (ex-message e))
+                         "An unexpected error occurred building the import. See the javascript console for details.")}))
         validation (when-not error
                      (sqlite-export/validate-import-txs
                       txs @conn {:import-edn-data? (:import-edn-data? import-options)}))]
