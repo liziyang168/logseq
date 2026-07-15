@@ -1240,9 +1240,14 @@
         title-entity (cond
                        (= 1 (count used-title-entities)) (first used-title-entities)
                        (= 1 (count title-entities)) (first title-entities))
-        entity (some #(when (entity-util/property? %) %)
-                     [ident-entity uuid-entity title-entity])]
-    (:db/ident entity)))
+        entities (remove nil? [ident-entity uuid-entity title-entity])]
+    (when (and ident-entity (not (entity-util/property? ident-entity)))
+      (throw (ex-info "Imported property ident identifies a non-property entity" {})))
+    (when (and uuid-entity (not (entity-util/property? uuid-entity)))
+      (throw (ex-info "Imported property UUID identifies a non-property entity" {})))
+    (when (< 1 (count (set (map :db/id entities))))
+      (throw (ex-info "Imported property ident, UUID, and title identify different properties" {})))
+    (:db/ident (first entities))))
 
 (defn- import-ident-overrides
   [db existing-pages properties import-options]

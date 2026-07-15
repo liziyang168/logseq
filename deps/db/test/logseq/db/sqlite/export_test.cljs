@@ -1437,6 +1437,26 @@
                     {})]
         (is (string/includes? (:error result) (str property-ident)))))))
 
+(deftest build-import-rejects-conflicting-property-identities
+  (let [property-a :user.property/a
+        property-b :user.property/b
+        conn (db-test/create-conn-with-blocks
+              {:properties {property-a {:block/title "Property A"
+                                        :logseq.property/type :default}
+                            property-b {:block/title "Property B"
+                                        :logseq.property/type :default}}})
+        property-b-uuid (:block/uuid (d/entity @conn property-b))
+        message (try
+                  (sqlite-export/build-import
+                   {:properties {property-a {:block/title "Property B"
+                                             :block/uuid property-b-uuid
+                                             :logseq.property/type :default}}}
+                   @conn
+                   {:import-edn-data? true})
+                  nil
+                  (catch :default error (ex-message error)))]
+    (is (string/includes? message "identify different properties"))))
+
 (deftest build-import-preserves-existing-page-properties
   (let [existing-text-ident :user.property/existing-text-source
         existing-checkbox-ident :user.property/existing-checkbox-source
