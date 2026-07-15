@@ -238,6 +238,17 @@
   (some #(contains? export-map %)
         [::sqlite-export/block :pages-and-blocks :properties :classes]))
 
+(defn- full-graph-import?
+  [export-map]
+  (or (= :datoms (::sqlite-export/graph-format export-map))
+      (contains? #{:graph :graph-human} (::sqlite-export/export-type export-map))
+      (some #(contains? export-map %)
+            [::sqlite-export/auto-include-namespaces
+             ::sqlite-export/graph-files
+             ::sqlite-export/kv-values
+             ::sqlite-export/property-history
+             ::sqlite-export/schema-version])))
+
 (defn- close-import-dialog!
   [import-inputs]
   (shui/dialog-close! (:dialog-id @import-inputs)))
@@ -263,7 +274,7 @@
         (or (= ::invalid-import export-map) (not (map? export-map)))
         (notification/show! (t :import/submitted-edn-invalid) :warning)
 
-        (= :datoms (::sqlite-export/graph-format export-map))
+        (full-graph-import? export-map)
         (do
           (notification/show! "Full-graph EDN is not supported here. Use graph restore instead." :error)
           (close-import-dialog! import-inputs))

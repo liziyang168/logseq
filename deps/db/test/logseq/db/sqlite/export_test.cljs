@@ -682,6 +682,23 @@
                 {:import-edn-data? true})]
     (is (string/includes? (:error result) (str unsupported-key)))))
 
+(deftest import-edn-data-rejects-full-graph-exports
+  (let [conn (sqlite-export/create-conn)
+        graph-human-result
+        (sqlite-export/build-import
+         {::sqlite-export/export-type :graph-human
+          ::sqlite-export/schema-version {:major 1 :minor 0}
+          :pages-and-blocks []}
+         @conn
+         {:import-edn-data? true})
+        datom-result
+        (sqlite-export/build-import
+         {::sqlite-export/graph-format :datoms :datoms []}
+         @conn
+         {:import-edn-data? true})]
+    (is (string/includes? (:error graph-human-result) "Full-graph EDN"))
+    (is (string/includes? (:error datom-result) "Full-graph EDN"))))
+
 (deftest graph-export-keeps-referenced-recycled-closed-value-config
   (let [property-id :plugin.property.degrande-colors/tldraw
         closed-value-uuid (random-uuid)

@@ -47,6 +47,15 @@
         (is (= ["Full-graph EDN is not supported here. Use graph restore instead."
                 :error nil]
                (last @notifications))))
+      (testing "full graph structured exports are rejected"
+        (submit-dialog! dialog-content
+                        {::sqlite-export/export-type :graph-human
+                         ::sqlite-export/schema-version {:major 1 :minor 0}
+                         :pages-and-blocks []}
+                        #js {:disabled false})
+        (is (= ["Full-graph EDN is not supported here. Use graph restore instead."
+                :error nil]
+               (last @notifications))))
       (testing "empty input stays editable"
         (submit-dialog! dialog-content {} #js {:disabled false})
         (is (= ["The EDN does not contain supported import data." :warning nil]
@@ -57,7 +66,7 @@
                         #js {:disabled false})
         (is (= ["Edit a block before importing block EDN data." :warning false]
                (last @notifications))))
-      (is (= 2 @close-count))
+      (is (= 3 @close-count))
       (is (zero? @request-count)))))
 
 (deftest import-edn-data-preserves-command-editor-target-test

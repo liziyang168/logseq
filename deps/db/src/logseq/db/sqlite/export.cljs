@@ -1408,6 +1408,13 @@
        sort
        vec))
 
+(defn- full-graph-import?
+  [export-map]
+  (or (datom-export? export-map)
+      (contains? #{:graph :graph-human} (::export-type export-map))
+      (some #(contains? export-map %)
+            [::auto-include-namespaces ::graph-files ::kv-values ::property-history ::schema-version])))
+
 (defn build-import
   "Given an export map, build the import tx to create it. In addition to standard sqlite.build keys,
    an export map can have the following namespaced keys:
@@ -1428,6 +1435,9 @@
   * :misc-tx - Txs to transact unrelated to other txs"
   [export-map* db {:keys [current-block] :as import-options}]
   (cond
+    (and (:import-edn-data? import-options) (full-graph-import? export-map*))
+    {:error "Full-graph EDN is not supported by Import EDN Data."}
+
     (and (:import-edn-data? import-options)
          (seq (unsupported-export-metadata-keys export-map*)))
     {:error (str "The imported EDN contains unsupported field(s): "
