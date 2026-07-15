@@ -1129,6 +1129,13 @@
 
 ;; Import fns
 ;; ==========
+(def ^:private existing-page-protected-attributes
+  #{:block/uuid :block/title :block/name :block/journal-day
+    :block/created-at :block/updated-at :block/collapsed? :build/keep-uuid?})
+
+(def ^:private existing-page-preserved-attributes
+  (disj existing-page-protected-attributes :block/updated-at :build/keep-uuid?))
+
 (defn- add-uuid-to-page-if-exists
   [db import-to-existing-page-uuids all-idents
    {:keys [existing-pages-keep-properties?]} m]
@@ -1142,13 +1149,20 @@
                  (some->> (:block/title m) (ldb/get-case-page db)))]
     (do
       (swap! import-to-existing-page-uuids assoc (:block/uuid m) (:block/uuid ent))
-      (cond-> (assoc m :block/uuid (:block/uuid ent))
-        (and (:build/properties m) existing-pages-keep-properties?)
-        (update :build/properties (fn [props]
-                                    (->> props
-                                         (remove (fn [[k _v]]
-                                                   (contains? ent (get all-idents k k))))
-                                         (into {}))))))
+      (let [page (if existing-pages-keep-properties?
+                   (-> (apply dissoc m existing-page-protected-attributes)
+                       (merge (select-keys ent existing-page-preserved-attributes))
+                       (assoc :block/uuid (:block/uuid ent)))
+                   (assoc m :block/uuid (:block/uuid ent)))]
+        (let [page' (cond-> page
+                      (and (:build/properties page) existing-pages-keep-properties?)
+                      (update :build/properties (fn [props]
+                                                  (->> props
+                                                       (remove (fn [[k _v]]
+                                                                 (contains? ent (get all-idents k k))))
+                                                       (into {})))))]
+          (cond-> page'
+            (empty? (:build/properties page')) (dissoc :build/properties)))))
     m))
 
 (defn- update-existing-properties

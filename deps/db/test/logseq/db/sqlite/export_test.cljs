@@ -1429,6 +1429,47 @@
       (is (= (:db/id page)
              (:db/id (:block/page (db-test/find-block-by-content @conn "Imported child"))))))))
 
+(deftest build-import-preserves-existing-page-metadata
+  (let [property-id :user.property/imported-text
+        properties {property-id {:logseq.property/type :default
+                                 :db/cardinality :db.cardinality/one}}
+        conn (db-test/create-conn-with-blocks
+              {:properties properties
+               :pages-and-blocks
+               [{:page {:build/journal 20250101
+                        :block/created-at 100
+                        :block/updated-at 200
+                        :block/collapsed? false}}]})
+        page-before (db-test/find-journal-by-journal-day @conn 20250101)
+        preserved-attrs [:block/uuid :block/title :block/name :block/journal-day
+                         :block/created-at :block/collapsed?]
+        import-data
+        {:properties properties
+         :pages-and-blocks
+         [{:page {:build/journal 20250101
+                  :block/uuid (random-uuid)
+                  :block/title "Imported title"
+                  :block/name "imported title"
+                  :block/journal-day 20250102
+                  :block/created-at 900
+                  :block/updated-at 901
+                  :block/collapsed? true
+                  :build/properties {property-id "Added"}}}]}
+        import! (fn [now]
+                  (with-redefs [common-util/time-ms (constantly now)]
+                    (let [txs (sqlite-export/build-import
+                               import-data @conn {:existing-pages-keep-properties? true})]
+                      (d/transact! conn (sqlite-export/import-tx-data txs)))))]
+    (import! 500)
+    (let [page (db-test/find-journal-by-journal-day @conn 20250101)]
+      (is (= (select-keys page-before preserved-attrs)
+             (select-keys page preserved-attrs)))
+      (is (= 500 (:block/updated-at page)))
+      (is (= "Added" (get (db-test/readable-properties page) property-id))))
+    (import! 600)
+    (is (= 500
+           (:block/updated-at (db-test/find-journal-by-journal-day @conn 20250101))))))
+
 (deftest build-export-omits-empty-build-properties
   (let [conn (db-test/create-conn-with-blocks
               {:properties {:user.property/p1 {:logseq.property/type :default}}
