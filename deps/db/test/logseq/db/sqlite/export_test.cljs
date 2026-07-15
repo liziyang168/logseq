@@ -1470,6 +1470,58 @@
     (is (= 500
            (:block/updated-at (db-test/find-journal-by-journal-day @conn 20250101))))))
 
+(deftest build-import-merges-existing-page-tags-and-aliases
+  (let [existing-tag :user.class/ExistingTag
+        shared-tag :user.class/SharedTag
+        imported-tag :user.class/ImportedTag
+        classes {existing-tag {} shared-tag {} imported-tag {}}
+        existing-alias-uuid (random-uuid)
+        shared-alias-uuid (random-uuid)
+        imported-alias-uuid (random-uuid)
+        alias-pages
+        [{:page {:block/title "Existing alias" :block/uuid existing-alias-uuid :build/keep-uuid? true}}
+         {:page {:block/title "Shared alias" :block/uuid shared-alias-uuid :build/keep-uuid? true}}
+         {:page {:block/title "Imported alias" :block/uuid imported-alias-uuid :build/keep-uuid? true}}]
+        conn (db-test/create-conn-with-blocks
+              {:classes classes
+               :pages-and-blocks
+               (into alias-pages
+                     [{:page {:block/title "Existing page"
+                              :build/tags #{existing-tag shared-tag}
+                              :block/alias #{[:block/uuid existing-alias-uuid]
+                                             [:block/uuid shared-alias-uuid]}}}
+                      {:page {:block/title "Alias-only page"
+                              :block/alias #{[:block/uuid existing-alias-uuid]}}}])})
+        import-data
+        {:classes classes
+         :pages-and-blocks
+         (into [{:page {:block/title "Existing page"
+                        :build/tags #{shared-tag imported-tag}
+                        :block/alias #{[:block/uuid shared-alias-uuid]
+                                       [:block/uuid imported-alias-uuid]}}}
+                {:page {:block/title "Alias-only page"
+                        :block/alias #{[:block/uuid imported-alias-uuid]}}}]
+               alias-pages)}]
+    (with-redefs [common-util/time-ms (constantly 700)]
+      (let [txs (sqlite-export/build-import
+                 import-data @conn {:existing-pages-keep-properties? true})]
+        (d/transact! conn (sqlite-export/import-tx-data txs))))
+    (let [page (db-test/find-page-by-title @conn "Existing page")
+          tags (->> (:block/tags page)
+                    (keep :db/ident)
+                    (filter #(= "user.class" (namespace %))))
+          aliases (map :block/uuid (:block/alias page))]
+      (is (= #{existing-tag shared-tag imported-tag} (set tags)))
+      (is (= 3 (count tags)))
+      (is (= #{existing-alias-uuid shared-alias-uuid imported-alias-uuid}
+             (set aliases)))
+      (is (= 3 (count aliases)))
+      (is (= 700 (:block/updated-at page))))
+    (let [page (db-test/find-page-by-title @conn "Alias-only page")]
+      (is (= #{existing-alias-uuid imported-alias-uuid}
+             (set (map :block/uuid (:block/alias page)))))
+      (is (= 700 (:block/updated-at page))))))
+
 (deftest build-export-omits-empty-build-properties
   (let [conn (db-test/create-conn-with-blocks
               {:properties {:user.property/p1 {:logseq.property/type :default}}
