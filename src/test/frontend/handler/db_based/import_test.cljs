@@ -105,6 +105,8 @@
 (deftest import-edn-data-blocks-concurrent-submission-test
   (async done
     (let [dialog-content (atom nil)
+          notifications (atom [])
+          close-count (atom 0)
           request-count (atom 0)
           request (p/deferred)
           button-element #js {:disabled false}
@@ -112,10 +114,13 @@
       (-> (p/with-redefs
             [i18n/t identity
              shui/dialog-open! (fn [content & _] (reset! dialog-content content))
-             shui/dialog-close! (constantly nil)
+             shui/dialog-close! (fn [dialog-id]
+                                  (when (not= :ls-dialog-cmdk dialog-id)
+                                    (swap! close-count inc)))
              shui/textarea (fn [props] [:textarea props])
              shui/button (fn [props child] [:button props child])
-             notification/show! (constantly nil)
+             notification/show! (fn [content status & _]
+                                   (swap! notifications conj [content status]))
              db-transact/apply-outliner-ops (fn [& _]
                                               (swap! request-count inc)
                                               request)]
@@ -127,10 +132,13 @@
               (let [result (click! #js {:currentTarget button-element})]
                 (click! #js {:currentTarget button-element})
                 (is (true? (.-disabled button-element)))
-                (p/resolve! request {})
+                (p/resolve! request {:error "Unsupported attribute :sample/field"})
                 result)))
           (p/then (fn []
                     (is (= 1 @request-count))
-                    (is (false? (.-disabled button-element)))))
+                    (is (false? (.-disabled button-element)))
+                    (is (= [["Unsupported attribute :sample/field" :error]]
+                           @notifications))
+                    (is (zero? @close-count))))
           (p/catch (fn [error] (is false (str error))))
           (p/finally done)))))

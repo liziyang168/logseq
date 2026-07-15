@@ -24,18 +24,27 @@
 (deftest apply-outliner-ops-pins-submission-repo
   (async done
     (let [current-repo (atom "graph-a")
+          initial-editor-info {:block-uuid (random-uuid)}
+          current-editor-info (atom initial-editor-info)
           calls (atom [])]
       (-> (p/with-redefs
             [util/node-test? false
              state/get-current-repo #(deref current-repo)
-             state/get-editor-info (constantly {:block-uuid (random-uuid)})
+             state/get-editor-info #(deref current-editor-info)
              state/<invoke-db-worker
-             (fn [method repo & _args]
-               (swap! calls conj [method repo])
+             (fn [method repo & args]
+               (swap! calls conj [method repo args])
                (reset! current-repo "graph-b")
                (p/resolved nil))]
-            (db-transact/apply-outliner-ops nil [[:test []]] {}))
+            (let [result (db-transact/apply-outliner-ops nil [[:test []]] {})]
+              (reset! current-editor-info {:block-uuid (random-uuid)})
+              result))
           (p/then (fn []
-                    (is (= ["graph-a" "graph-a"] (mapv second @calls)))))
+                    (is (= ["graph-a" "graph-a"] (mapv second @calls)))
+                    (let [pending-call (some #(when (= :thread-api/undo-redo-set-pending-editor-info
+                                                       (first %))
+                                                %)
+                                             @calls)]
+                      (is (= initial-editor-info (first (nth pending-call 2)))))))
           (p/catch (fn [error] (is false (str error))))
           (p/finally done)))))
