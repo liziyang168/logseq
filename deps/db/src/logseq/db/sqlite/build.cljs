@@ -633,7 +633,8 @@
                                    (db-ident/create-db-ident-from-name (namespace kw) (name kw)))
                                  (db-class/create-user-class-ident-from-name nil (name kw)))))
         class-idents (->> (keys classes)
-                          (map #(vector % (create-class-ident %)))
+                          (map #(vector % (or (get ident-overrides %)
+                                             (create-class-ident %))))
                           (into {}))
         _ (assert (= (count (set (vals class-idents))) (count classes)) "All class db-idents must be unique")
         all-idents (merge property-idents class-idents)]

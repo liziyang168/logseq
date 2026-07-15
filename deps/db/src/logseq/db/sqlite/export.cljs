@@ -1252,15 +1252,49 @@
       (throw (ex-info "Imported property ident, UUID, and title identify different properties" {})))
     (:db/ident (first entities))))
 
+(defn- existing-import-class-ident
+  [db existing-pages class-key class]
+  (let [ident-entity (when (qualified-keyword? class-key)
+                       (d/entity db class-key))
+        uuid-entity (when-let [class-uuid (:block/uuid class)]
+                      (d/entity db [:block/uuid class-uuid]))
+        title (or (:block/title class) (name class-key))
+        title-entities (mapv #(d/entity db %)
+                             (ldb/page-exists? db title [:logseq.class/Tag]))
+        used-title-entities
+        (filterv (fn [class-entity]
+                   (some #(contains? (set (keep :db/ident (:block/tags %)))
+                                     (:db/ident class-entity))
+                         existing-pages))
+                 title-entities)
+        title-entity (cond
+                       (= 1 (count used-title-entities)) (first used-title-entities)
+                       (= 1 (count title-entities)) (first title-entities))
+        entities (remove nil? [ident-entity uuid-entity title-entity])]
+    (when (and ident-entity (not (entity-util/class? ident-entity)))
+      (throw (ex-info "Imported class ident identifies a non-class entity" {})))
+    (when (and uuid-entity (not (entity-util/class? uuid-entity)))
+      (throw (ex-info "Imported class UUID identifies a non-class entity" {})))
+    (when (< 1 (count (set (map :db/id entities))))
+      (throw (ex-info "Imported class ident, UUID, and title identify different classes" {})))
+    (:db/ident (first entities))))
+
 (defn- import-ident-overrides
-  [db existing-pages properties import-options]
+  [db existing-pages properties classes import-options]
   (when (:import-edn-data? import-options)
-    (into {}
-          (keep (fn [[property-key property]]
-                  (when-let [ident (existing-import-property-ident
-                                    db existing-pages property-key property)]
-                    [property-key ident])))
-          properties)))
+    (merge
+     (into {}
+           (keep (fn [[property-key property]]
+                   (when-let [ident (existing-import-property-ident
+                                     db existing-pages property-key property)]
+                     [property-key ident])))
+           properties)
+     (into {}
+           (keep (fn [[class-key class]]
+                   (when-let [ident (existing-import-class-ident
+                                     db existing-pages class-key class)]
+                     [class-key ident])))
+           classes))))
 
 (defn- check-for-existing-entities
   "Checks export map for existing entities and adds :block/uuid to them if they exist in graph to import.
@@ -1277,7 +1311,7 @@
                         [page entity])))
               pages-and-blocks)
         ident-overrides (import-ident-overrides db (vals existing-page-entities)
-                                                properties import-options)
+                                                properties classes import-options)
         export-map
         (cond-> {:build-existing-tx? true
                  :extract-content-refs? false}
@@ -1294,7 +1328,7 @@
           (assoc :classes
                  (->> classes
                       (map (fn [[k v]]
-                             (if-let [ent (d/entity db k)]
+                             (if-let [ent (d/entity db (get ident-overrides k k))]
                                [k (assoc v :block/uuid (:block/uuid ent))]
                                [k v])))
                       (into {})))

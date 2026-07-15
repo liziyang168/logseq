@@ -1484,6 +1484,27 @@
                   (catch :default error (ex-message error)))]
     (is (string/includes? message "identify different properties"))))
 
+(deftest build-import-reuses-existing-class-identities
+  (let [class-ident :user.class/existing
+        conn (db-test/create-conn-with-blocks
+              {:classes {class-ident {:block/title "Existing class"}}})]
+    (with-redefs [db-ident/create-db-ident-from-name
+                  (fn [class-namespace class-name]
+                    (keyword class-namespace (str class-name "-new")))]
+      (let [txs (sqlite-export/build-import
+                 {:classes {class-ident {:block/title "Existing class"}}
+                  :pages-and-blocks
+                  [{:page {:block/title "Imported page"
+                           :build/tags #{class-ident}}}]}
+                 @conn
+                 {:import-edn-data? true})]
+        (d/transact! conn (sqlite-export/import-tx-data txs))))
+    (is (= #{class-ident}
+           (->> (:block/tags (db-test/find-page-by-title @conn "Imported page"))
+                (keep :db/ident)
+                (filter #(= "user.class" (namespace %)))
+                set)))))
+
 (deftest build-import-preserves-existing-page-properties
   (let [existing-text-ident :user.property/existing-text-source
         existing-checkbox-ident :user.property/existing-checkbox-source
