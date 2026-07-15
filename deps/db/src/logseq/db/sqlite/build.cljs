@@ -67,13 +67,14 @@
     block))
 
 (defn- get-ident [all-idents kw]
-  (if (and (qualified-keyword? kw)
-           ;; Loosen checks to any property or class for build-existing-tx?
-           (or (db-property/property? kw)
-               (db-class/user-class-namespace? (namespace kw))))
-    kw
-    (or (get all-idents kw)
-        (throw (ex-info (str "No ident found for " (pr-str kw)) {})))))
+  (or (get (::ident-overrides (meta all-idents)) kw)
+      (when (and (qualified-keyword? kw)
+                 ;; Loosen checks to any property or class for build-existing-tx?
+                 (or (db-property/property? kw)
+                     (db-class/user-class-namespace? (namespace kw))))
+        kw)
+      (get all-idents kw)
+      (throw (ex-info (str "No ident found for " (pr-str kw)) {}))))
 
 (defn- ->block-properties [properties page-uuids all-idents {:keys [translate-property-values?]}]
   (let [translate-property-values (if translate-property-values?
@@ -637,7 +638,8 @@
                                              (create-class-ident %))))
                           (into {}))
         _ (assert (= (count (set (vals class-idents))) (count classes)) "All class db-idents must be unique")
-        all-idents (merge property-idents class-idents)]
+        all-idents (with-meta (merge property-idents class-idents)
+                     {::ident-overrides ident-overrides})]
     (assert (= (count all-idents) (+ (count property-idents) (count class-idents)))
             "Class and property db-idents are unique and do not overlap")
     all-idents))
@@ -1009,7 +1011,10 @@
    cardinality property are defined as a set. The following property types are
    supported: :default, :url, :checkbox, :number, :node and :date. :checkbox and
    :number values are written as booleans and integers/floats. :node references
-   are written as vectors e.g. `[:build/page {:block/title \"PAGE NAME\"}]`"
+   are written as vectors e.g. `[:build/page {:block/title \"PAGE NAME\"}]`.
+
+   The two-argument arity is internal to `logseq.db.sqlite.export`; `ident-overrides`
+   maps imported property or class keys to existing target-graph idents."
   ([options*]
    (build-blocks-tx options* nil))
   ([options* ident-overrides]
