@@ -6,8 +6,8 @@
   (let [explicit-editor-info? (contains? context :editor-info)
         editor-info (if explicit-editor-info?
                       (:editor-info context)
-                      (or (state/get-editor-info)
-                          (get-in @state/state [:search/args :editor-info])))]
+                      (or (get-in @state/state [:search/args :editor-info])
+                          (state/get-editor-info)))]
     (state/update-state! :search/args
                          #(cond-> (or % {})
                             editor-info (assoc :editor-info editor-info)

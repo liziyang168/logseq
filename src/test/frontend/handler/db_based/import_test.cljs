@@ -59,11 +59,18 @@
         (is (= ["The EDN does not contain supported import data." :warning nil]
                (last @notifications))))
       (testing "block import requires an editing target"
-        (submit-dialog! dialog-content
-                        {::sqlite-export/block {:block/title "Imported block"}}
-                        #js {:disabled false})
-        (is (= ["Edit a block before importing block EDN data." :warning false]
-               (last @notifications))))
+        (let [original-search-args (:search/args @state/state)]
+          (try
+            (state/set-state! :search/args nil)
+            (with-redefs [state/get-editor-args
+                          (constantly [{:block-id (random-uuid)}])]
+              (submit-dialog! dialog-content
+                              {::sqlite-export/block {:block/title "Imported block"}}
+                              #js {:disabled false}))
+            (is (= ["Edit a block before importing block EDN data." :warning false]
+                   (last @notifications)))
+            (finally
+              (state/set-state! :search/args original-search-args)))))
       (is (= 3 @close-count))
       (is (zero? @request-count)))))
 
@@ -81,7 +88,7 @@
           original-search-args (:search/args @state/state)]
       (-> (p/with-redefs
             [i18n/t identity
-             state/get-editor-info (constantly nil)
+             state/get-editor-info (constantly {:block-uuid stale-uuid})
              state/get-editor-args (constantly nil)
              db/entity (fn [lookup]
                          (when (= [:block/uuid target-uuid] lookup)
@@ -97,8 +104,8 @@
                                               (reset! submitted-ops ops)
                                               (p/resolved {}))]
             (state/set-state! :search/args
-                              {:editor-info {:block-uuid stale-uuid}})
-            (search-events/capture-editor-info! {:editor-info editor-info})
+                              {:editor-info editor-info})
+            (search-events/capture-editor-info! nil)
             (submit-dialog! dialog-content export-map #js {:disabled false}))
           (p/then (fn []
                     (is (= target-block

@@ -313,8 +313,7 @@
   "Displays dialog which allows users to paste and import sqlite.build EDN Data"
   []
   (let [dialog-id (keyword (str "ls-dialog-import-edn-data-" (random-uuid)))
-        target-block-id (or (get-in @state/state [:search/args :editor-info :block-uuid])
-                            (:block-id (first (state/get-editor-args))))
+        target-block-id (get-in @state/state [:search/args :editor-info :block-uuid])
         import-inputs (atom {:import-data ""
                              :dialog-id dialog-id
                              :import-block? false
