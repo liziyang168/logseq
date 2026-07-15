@@ -1463,6 +1463,24 @@
       (is (= (:db/id page)
              (:db/id (:block/page (db-test/find-block-by-content @conn "Imported child"))))))))
 
+(deftest build-import-replaces-current-block-from-bare-block-export
+  (let [conn (db-test/create-conn-with-blocks
+              [{:page {:block/title "Target page"}
+                :blocks [{:block/title "Target block"}]}])
+        target-block (db-test/find-block-by-content @conn "Target block")
+        target-uuid (:block/uuid target-block)
+        page-uuid (get-in target-block [:block/page :block/uuid])
+        txs (sqlite-export/build-import
+             {::sqlite-export/block {:block/title "Imported block"}}
+             @conn
+             {:current-block target-block
+              :existing-pages-keep-properties? true
+              :import-edn-data? true})]
+    (d/transact! conn (sqlite-export/import-tx-data txs))
+    (let [block (d/entity @conn [:block/uuid target-uuid])]
+      (is (= "Imported block" (:block/title block)))
+      (is (= page-uuid (get-in block [:block/page :block/uuid]))))))
+
 (deftest build-import-resolves-existing-page-by-uuid
   (let [property-id :user.property/status
         properties {property-id {:logseq.property/type :default
