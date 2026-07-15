@@ -1386,17 +1386,25 @@
    Returns {:db db-after :tx-data tx-data} when valid or {:error string} when invalid."
   ([txs db]
    (validate-import-txs txs db {:edn-label "imported EDN"}))
-  ([txs db {:keys [edn-label]
+  ([txs db {:keys [edn-label import-edn-data?]
             :or {edn-label "imported EDN"}}]
    (if-let [error (:error txs)]
      {:error error}
      (try
-       (let [result (validate-import-tx-data txs db edn-label)]
-         (if-let [errors (seq (:errors result))]
+       (let [tx-data (import-tx-data txs)
+             result (when (seq tx-data)
+                      (validate-import-tx-data txs db edn-label))]
+         (cond
+           (and import-edn-data? (empty? tx-data))
+           {:error "The imported EDN does not contain any importable data."}
+
+           (seq (:errors result))
            (do
              (js/console.error (str (string/capitalize edn-label) " has validation errors:"))
-             (pprint/pprint errors)
+             (pprint/pprint (:errors result))
              (dissoc result :errors))
+
+           :else
            result))
        (catch :default e
          (js/console.error (str "Unexpected " edn-label " validation error:") e)

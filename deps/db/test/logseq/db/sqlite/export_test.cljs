@@ -616,6 +616,15 @@
     (is (not (some #{[:db/add (:db/id plugin-property-ent) :hide? true]} tx-data)))
     (is (not (some #{[:db/add (:db/id plugin-property-ent) :public? false]} tx-data)))))
 
+(deftest import-edn-data-rejects-zero-transaction
+  (let [conn (sqlite-export/create-conn)
+        result (sqlite-export/validate-import-txs
+                (sqlite-export/build-import {:pages-and-blocks []} @conn {})
+                @conn
+                {:import-edn-data? true})]
+    (is (= "The imported EDN does not contain any importable data."
+           (:error result)))))
+
 (deftest graph-export-keeps-referenced-recycled-closed-value-config
   (let [property-id :plugin.property.degrande-colors/tldraw
         closed-value-uuid (random-uuid)
