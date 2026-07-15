@@ -29,10 +29,13 @@
 
 (defn- search
   [mode]
-  (editor-handler/escape-editing {:select? true})
-  (if (state/get-search-mode)
-    (js/setTimeout #(route-handler/go-to-search! mode) 128)
-    (route-handler/go-to-search! mode)))
+  (let [search-args (when-let [editor-info (or (state/get-editor-info)
+                                                (get-in @state/state [:search/args :editor-info]))]
+                      {:editor-info editor-info})]
+    (editor-handler/escape-editing {:select? true})
+    (if (state/get-search-mode)
+      (js/setTimeout #(route-handler/go-to-search! mode search-args) 128)
+      (route-handler/go-to-search! mode search-args))))
 
 ;; TODO: Namespace all-default-keyboard-shortcuts keys with `:command` e.g.
 ;; `:command.date-picker/complete`. They are namespaced in translation but

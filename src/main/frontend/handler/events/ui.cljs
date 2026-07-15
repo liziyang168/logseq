@@ -57,6 +57,10 @@
      (path/path-join common-config/local-assets-dir file-name))))
 
 (defmethod events/handle :go/search [_]
+  (when-let [editor-info (or (get-in @state/state [:search/args :editor-info])
+                             (state/get-editor-info))]
+    (state/update-state! :search/args
+                         #(assoc (or % {}) :editor-info editor-info)))
   (when-not (editor-handler/dialog-exists? :ls-dialog-cmdk)
     (shui/dialog-open!
      cmdk/cmdk-modal

@@ -1,0 +1,136 @@
+(ns frontend.handler.db-based.import-test
+  (:require [cljs.test :refer [async deftest is testing]]
+            [frontend.context.i18n :as i18n]
+            [frontend.db :as db]
+            [frontend.db.transact :as db-transact]
+            [frontend.handler.db-based.import :as db-import]
+            [frontend.handler.editor :as editor-handler]
+            [frontend.handler.notification :as notification]
+            [frontend.handler.route :as route-handler]
+            [frontend.modules.shortcut.config :as shortcut-config]
+            [frontend.state :as state]
+            [logseq.db.sqlite.export :as sqlite-export]
+            [logseq.shui.ui :as shui]
+            [promesa.core :as p]))
+
+(defn- submit-dialog!
+  [dialog-content export-map button-element]
+  (db-import/import-edn-data-dialog)
+  (let [[_ _ textarea button] @dialog-content]
+    ((:on-change (second textarea))
+     #js {:target #js {:value (pr-str export-map)}})
+    ((:on-click (second button))
+     #js {:currentTarget button-element})))
+
+(deftest import-edn-data-preflight-test
+  (let [dialog-content (atom nil)
+        notifications (atom [])
+        close-count (atom 0)
+        request-count (atom 0)]
+    (with-redefs [i18n/t identity
+                  state/get-editor-args (constantly nil)
+                  shui/dialog-open! (fn [content & _] (reset! dialog-content content))
+                  shui/dialog-close! (fn [dialog-id]
+                                       (when (not= :ls-dialog-cmdk dialog-id)
+                                         (swap! close-count inc)))
+                  shui/textarea (fn [props] [:textarea props])
+                  shui/button (fn [props child] [:button props child])
+                  notification/show! (fn [content status & [clear?]]
+                                       (swap! notifications conj [content status clear?]))
+                  db-transact/apply-outliner-ops (fn [& _]
+                                                   (swap! request-count inc)
+                                                   (p/resolved {}))]
+      (testing "full graph datoms are rejected"
+        (submit-dialog! dialog-content
+                        {::sqlite-export/graph-format :datoms :datoms []}
+                        #js {:disabled false})
+        (is (= ["Full-graph EDN is not supported here. Use graph restore instead."
+                :error nil]
+               (last @notifications))))
+      (testing "empty input stays editable"
+        (submit-dialog! dialog-content {} #js {:disabled false})
+        (is (= ["The EDN does not contain supported import data." :warning nil]
+               (last @notifications))))
+      (testing "block import requires an editing target"
+        (submit-dialog! dialog-content
+                        {::sqlite-export/block {:block/title "Imported block"}}
+                        #js {:disabled false})
+        (is (= ["Edit a block before importing block EDN data." :warning false]
+               (last @notifications))))
+      (is (= 2 @close-count))
+      (is (zero? @request-count)))))
+
+(deftest import-edn-data-preserves-command-editor-target-test
+  (async done
+    (let [dialog-content (atom nil)
+          submitted-ops (atom nil)
+          target-uuid (random-uuid)
+          page-uuid (random-uuid)
+          editor-info {:block-uuid target-uuid}
+          target-block {:block/uuid target-uuid
+                        :block/page {:block/uuid page-uuid}}
+          export-map {::sqlite-export/block {:block/title "Imported block"}}
+          original-search-args (:search/args @state/state)]
+      (-> (p/with-redefs
+            [i18n/t identity
+             state/get-editor-info (constantly editor-info)
+             state/get-editor-args (constantly nil)
+             state/get-search-mode (constantly nil)
+             editor-handler/escape-editing (constantly nil)
+             route-handler/go-to-search! (fn [_mode & [args]]
+                                           (state/set-state! :search/args args))
+             db/entity (constantly target-block)
+             shui/dialog-open! (fn [content & _] (reset! dialog-content content))
+             shui/dialog-close! (constantly nil)
+             shui/textarea (fn [props] [:textarea props])
+             shui/button (fn [props child] [:button props child])
+             notification/show! (constantly nil)
+             db-transact/apply-outliner-ops (fn [_conn ops _opts]
+                                              (reset! submitted-ops ops)
+                                              (p/resolved {}))]
+            ((get-in shortcut-config/all-built-in-keyboard-shortcuts
+                     [:command-palette/toggle :fn]))
+            (submit-dialog! dialog-content export-map #js {:disabled false}))
+          (p/then (fn []
+                    (is (= target-block
+                           (get-in @submitted-ops [0 1 1 :current-block])))
+                    (is (true? (get-in @submitted-ops
+                                       [0 1 1 :existing-pages-keep-properties?])))
+                    (is (true? (get-in @submitted-ops [0 1 1 :import-edn-data?])))))
+          (p/catch (fn [error] (is false (str error))))
+          (p/finally (fn []
+                       (state/set-state! :search/args original-search-args)
+                       (done)))))))
+
+(deftest import-edn-data-blocks-concurrent-submission-test
+  (async done
+    (let [dialog-content (atom nil)
+          request-count (atom 0)
+          request (p/deferred)
+          button-element #js {:disabled false}
+          export-map {:pages-and-blocks [{:page {:block/title "Page"}}]}]
+      (-> (p/with-redefs
+            [i18n/t identity
+             shui/dialog-open! (fn [content & _] (reset! dialog-content content))
+             shui/dialog-close! (constantly nil)
+             shui/textarea (fn [props] [:textarea props])
+             shui/button (fn [props child] [:button props child])
+             notification/show! (constantly nil)
+             db-transact/apply-outliner-ops (fn [& _]
+                                              (swap! request-count inc)
+                                              request)]
+            (db-import/import-edn-data-dialog)
+            (let [[_ _ textarea button] @dialog-content
+                  click! (:on-click (second button))]
+              ((:on-change (second textarea))
+               #js {:target #js {:value (pr-str export-map)}})
+              (let [result (click! #js {:currentTarget button-element})]
+                (click! #js {:currentTarget button-element})
+                (is (true? (.-disabled button-element)))
+                (p/resolve! request {})
+                result)))
+          (p/then (fn []
+                    (is (= 1 @request-count))
+                    (is (false? (.-disabled button-element)))))
+          (p/catch (fn [error] (is false (str error))))
+          (p/finally done)))))
