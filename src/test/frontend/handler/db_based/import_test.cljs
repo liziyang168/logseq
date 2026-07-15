@@ -4,10 +4,8 @@
             [frontend.db :as db]
             [frontend.db.transact :as db-transact]
             [frontend.handler.db-based.import :as db-import]
-            [frontend.handler.editor :as editor-handler]
+            [frontend.handler.events.search :as search-events]
             [frontend.handler.notification :as notification]
-            [frontend.handler.route :as route-handler]
-            [frontend.modules.shortcut.config :as shortcut-config]
             [frontend.state :as state]
             [logseq.db.sqlite.export :as sqlite-export]
             [logseq.shui.ui :as shui]
@@ -74,6 +72,7 @@
     (let [dialog-content (atom nil)
           submitted-ops (atom nil)
           target-uuid (random-uuid)
+          stale-uuid (random-uuid)
           page-uuid (random-uuid)
           editor-info {:block-uuid target-uuid}
           target-block {:block/uuid target-uuid
@@ -82,14 +81,14 @@
           original-search-args (:search/args @state/state)]
       (-> (p/with-redefs
             [i18n/t identity
-             state/get-editor-info (constantly editor-info)
+             state/get-editor-info (constantly nil)
              state/get-editor-args (constantly nil)
-             state/get-search-mode (constantly nil)
-             editor-handler/escape-editing (constantly nil)
-             route-handler/go-to-search! (fn [_mode & [args]]
-                                           (state/set-state! :search/args args))
-             db/entity (constantly target-block)
-             shui/dialog-open! (fn [content & _] (reset! dialog-content content))
+             db/entity (fn [lookup]
+                         (when (= [:block/uuid target-uuid] lookup)
+                           target-block))
+             shui/dialog-open! (fn [content & _]
+                                 (when (vector? content)
+                                   (reset! dialog-content content)))
              shui/dialog-close! (constantly nil)
              shui/textarea (fn [props] [:textarea props])
              shui/button (fn [props child] [:button props child])
@@ -97,8 +96,9 @@
              db-transact/apply-outliner-ops (fn [_conn ops _opts]
                                               (reset! submitted-ops ops)
                                               (p/resolved {}))]
-            ((get-in shortcut-config/all-built-in-keyboard-shortcuts
-                     [:command-palette/toggle :fn]))
+            (state/set-state! :search/args
+                              {:editor-info {:block-uuid stale-uuid}})
+            (search-events/capture-editor-info! {:editor-info editor-info})
             (submit-dialog! dialog-content export-map #js {:disabled false}))
           (p/then (fn []
                     (is (= target-block

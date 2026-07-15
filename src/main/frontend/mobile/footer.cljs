@@ -27,7 +27,8 @@
      (mobile-bar-command
       #(do (when-not (mobile-util/native-ipad?)
              (state/set-left-sidebar-open! false))
-           (state/pub-event! [:go/search]))
+           (state/pub-event!
+            [:go/search {:editor-info (state/get-editor-info)}]))
       "search")
      (mobile-bar-command state/toggle-document-mode! "notes")
      (mobile-bar-command

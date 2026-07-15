@@ -28,6 +28,7 @@
             [frontend.handler.db-based.sync :as rtc-handler]
             [frontend.handler.editor :as editor-handler]
             [frontend.handler.events :as events]
+            [frontend.handler.events.search :as search-events]
             [frontend.handler.notification :as notification]
             [frontend.handler.page :as page-handler]
             [frontend.handler.plugin :as plugin-handler]
@@ -56,11 +57,8 @@
      (config/get-repo-dir (state/get-current-repo))
      (path/path-join common-config/local-assets-dir file-name))))
 
-(defmethod events/handle :go/search [_]
-  (when-let [editor-info (or (get-in @state/state [:search/args :editor-info])
-                             (state/get-editor-info))]
-    (state/update-state! :search/args
-                         #(assoc (or % {}) :editor-info editor-info)))
+(defmethod events/handle :go/search [[_ context]]
+  (search-events/capture-editor-info! context)
   (when-not (editor-handler/dialog-exists? :ls-dialog-cmdk)
     (shui/dialog-open!
      cmdk/cmdk-modal

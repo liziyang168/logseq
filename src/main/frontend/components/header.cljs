@@ -475,7 +475,8 @@
               :on-click #(do (when (or (mobile-util/native-android?)
                                        (mobile-util/native-iphone?))
                                (state/set-left-sidebar-open! false))
-                             (state/pub-event! [:go/search]))}
+                             (state/pub-event!
+                              [:go/search {:editor-info (state/get-editor-info)}]))}
              (ui/icon "search" {:size ui/icon-size})]
             (t :nav/search))))]
 
