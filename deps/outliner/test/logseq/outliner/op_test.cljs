@@ -218,16 +218,3 @@
                       conn
                       [[:set-block-property [block-uuid property-id true]]]
                       {})))))))
-
-(deftest apply-ops-validates-import-options-test
-  (let [conn (db-test/create-conn-with-blocks [])]
-    (is (thrown? js/Error
-                 (outliner-op/apply-ops!
-                  conn
-                  [[:batch-import-edn [{} {:import-edn-data? "false"}]]]
-                  {})))
-    (is (thrown? js/Error
-                 (outliner-op/apply-ops!
-                  conn
-                  [[:batch-import-edn [{} {:unsupported-option true}]]]
-                  {})))))

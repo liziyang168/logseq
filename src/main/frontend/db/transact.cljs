@@ -48,22 +48,20 @@
   (when (seq ops)
     (if util/node-test?
       (outliner-op/apply-ops! conn ops opts)
-      (let [repo (state/get-current-repo)
-            editor-info (state/get-editor-info)
-            opts' (-> opts
+      (let [opts' (-> opts
                       ensure-local-op-tx-id
                       (assoc
                        :client-id (:client-id @state/state)
                        :local-tx? true))
             request #(state/<invoke-db-worker
                       :thread-api/apply-outliner-ops
-                      repo
+                      (state/get-current-repo)
                       ops
                       opts')]
         (frontend.db.transact/worker-call
          (fn []
            (p/do!
             (state/<invoke-db-worker :thread-api/undo-redo-set-pending-editor-info
-                                     repo
-                                     editor-info)
+                                     (state/get-current-repo)
+                                     (state/get-editor-info))
             (request))))))))

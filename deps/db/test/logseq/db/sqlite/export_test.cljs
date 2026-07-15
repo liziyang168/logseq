@@ -10,7 +10,6 @@
             [logseq.common.util.page-ref :as page-ref]
             [logseq.common.uuid :as common-uuid]
             [logseq.db :as ldb]
-            [logseq.db.frontend.db-ident :as db-ident]
             [logseq.db.frontend.schema :as db-schema]
             [logseq.db.frontend.validate :as db-validate]
             [logseq.db.sqlite.create-graph :as sqlite-create-graph]
@@ -1451,87 +1450,17 @@
                                {:logseq.property/description "first description"
                                 :logseq.property/exclude-from-graph-view true})))
 
-(deftest build-import-queries-existing-properties-by-imported-ident
-  (let [property-ident :user.property/existing
-        conn (db-test/create-conn-with-blocks
-              {:properties {property-ident {:logseq.property/type :default}}})]
-    (with-redefs [db-ident/create-db-ident-from-name
-                  (fn [property-namespace property-name]
-                    (keyword property-namespace (str property-name "-new")))]
-      (let [result (sqlite-export/build-import
-                    {:properties {property-ident {:logseq.property/type :number}}}
-                    @conn
-                    {})]
-        (is (string/includes? (:error result) (str property-ident)))))))
-
-(deftest build-import-rejects-conflicting-property-identities
-  (let [property-a :user.property/a
-        property-b :user.property/b
-        conn (db-test/create-conn-with-blocks
-              {:properties {property-a {:block/title "Property A"
-                                        :logseq.property/type :default}
-                            property-b {:block/title "Property B"
-                                        :logseq.property/type :default}}})
-        property-b-uuid (:block/uuid (d/entity @conn property-b))
-        message (try
-                  (sqlite-export/build-import
-                   {:properties {property-a {:block/title "Property B"
-                                             :block/uuid property-b-uuid
-                                             :logseq.property/type :default}}}
-                   @conn
-                   {:import-edn-data? true})
-                  nil
-                  (catch :default error (ex-message error)))]
-    (is (string/includes? message "identify different properties"))))
-
-(deftest build-import-reuses-existing-class-identities
-  (let [target-class-ident :user.class/existing-target
-        source-class-ident :user.class/existing-source
-        child-class-ident :user.class/child
-        conn (db-test/create-conn-with-blocks
-              {:classes {target-class-ident {:block/title "Existing class"}}})]
-    (with-redefs [db-ident/create-db-ident-from-name
-                  (fn [class-namespace class-name]
-                    (keyword class-namespace (str class-name "-new")))]
-      (let [txs (sqlite-export/build-import
-                 {:classes {source-class-ident {:block/title "Existing class"}
-                            child-class-ident {:block/title "Child class"
-                                               :build/class-extends [source-class-ident]}}
-                  :pages-and-blocks
-                  [{:page {:block/title "Imported page"
-                           :build/tags #{source-class-ident}}}]}
-                 @conn
-                 {:import-edn-data? true})]
-        (d/transact! conn (sqlite-export/import-tx-data txs))))
-    (is (= #{target-class-ident}
-           (->> (:block/tags (db-test/find-page-by-title @conn "Imported page"))
-                (keep :db/ident)
-                (filter #(= "user.class" (namespace %)))
-                set)))
-    (is (= 1 (count (ldb/page-exists? @conn "Existing class" [:logseq.class/Tag]))))
-    (is (= #{target-class-ident}
-           (set (map :db/ident
-                     (:logseq.property.class/extends (d/entity @conn child-class-ident))))))))
-
 (deftest build-import-preserves-existing-page-properties
   (let [existing-text-ident :user.property/existing-text-source
         existing-checkbox-ident :user.property/existing-checkbox-source
-        unused-text-ident :user.property/existing-text-unused
-        unused-checkbox-ident :user.property/existing-checkbox-unused
         conn (db-test/create-conn-with-blocks
               {:properties
                {existing-text-ident {:block/title "existing-text"
                                      :logseq.property/type :default
                                      :db/cardinality :db.cardinality/one}
                 existing-checkbox-ident {:block/title "existing-checkbox"
-                                          :logseq.property/type :checkbox
-                                          :db/cardinality :db.cardinality/one}
-                unused-text-ident {:block/title "existing-text"
-                                   :logseq.property/type :default
-                                   :db/cardinality :db.cardinality/one}
-                unused-checkbox-ident {:block/title "existing-checkbox"
-                                       :logseq.property/type :checkbox
-                                       :db/cardinality :db.cardinality/one}}
+                                         :logseq.property/type :checkbox
+                                         :db/cardinality :db.cardinality/one}}
                :pages-and-blocks
                [{:page {:block/title "Existing page"
                         :build/properties {existing-text-ident "Existing"
@@ -1558,8 +1487,6 @@
       (is (= "Existing" (get properties' existing-text-ident)))
       (is (false? (get properties' existing-checkbox-ident)))
       (is (= "Added" (:user.property/imported-text properties')))
-      (is (= 2 (count (ldb/page-exists? @conn "existing-text" [:logseq.class/Property]))))
-      (is (= 2 (count (ldb/page-exists? @conn "existing-checkbox" [:logseq.class/Property]))))
       (is (= (:db/id page)
              (:db/id (:block/page (db-test/find-block-by-content @conn "Imported child"))))))))
 
@@ -1580,54 +1507,6 @@
     (let [block (d/entity @conn [:block/uuid target-uuid])]
       (is (= "Imported block" (:block/title block)))
       (is (= page-uuid (get-in block [:block/page :block/uuid]))))))
-
-(deftest build-import-resolves-existing-page-by-uuid
-  (let [property-id :user.property/status
-        properties {property-id {:logseq.property/type :default
-                                 :db/cardinality :db.cardinality/one}}
-        conn (db-test/create-conn-with-blocks
-              {:properties properties
-               :pages-and-blocks
-               [{:page {:block/title "Existing page"
-                        :build/properties {property-id "Existing"}}}
-                {:page {:block/title "Other page"}}]})
-        page (db-test/find-page-by-title @conn "Existing page")
-        import-data
-        {:properties properties
-         :pages-and-blocks
-         [{:page {:block/uuid (:block/uuid page)
-                  :block/title "Imported title"
-                  :build/properties {property-id "Imported"}}}]}
-        txs (sqlite-export/build-import
-             import-data @conn {:existing-pages-keep-properties? true
-                                :import-edn-data? true})]
-    (d/transact! conn (sqlite-export/import-tx-data txs))
-    (let [page' (d/entity @conn [:block/uuid (:block/uuid page)])]
-      (is (= "Existing page" (:block/title page')))
-      (is (= "Existing" (get (db-test/readable-properties page') property-id))))
-    (let [message (try
-                    (sqlite-export/build-import
-                     {:pages-and-blocks
-                      [{:page {:block/uuid (:block/uuid page)
-                               :block/title "Other page"}}]}
-                     @conn
-                     {:existing-pages-keep-properties? true
-                      :import-edn-data? true})
-                    nil
-                    (catch :default error (ex-message error)))]
-      (is (string/includes? message "identify different pages")))
-    (let [source-uuid (random-uuid)
-          message (try
-                    (sqlite-export/build-import
-                     {:pages-and-blocks
-                      [{:page {:block/uuid source-uuid :block/title "Existing page"}}
-                       {:page {:block/uuid source-uuid :block/title "Other page"}}]}
-                     @conn
-                     {:existing-pages-keep-properties? true
-                      :import-edn-data? true})
-                    nil
-                    (catch :default error (ex-message error)))]
-      (is (string/includes? message "maps to multiple existing pages")))))
 
 (deftest build-import-preserves-existing-page-metadata
   (let [property-id :user.property/imported-text
@@ -1669,24 +1548,19 @@
       (is (= "Added" (get (db-test/readable-properties page) property-id))))
     (import! 600)
     (is (= 500
-           (:block/updated-at (db-test/find-journal-by-journal-day @conn 20250101))))
-    (let [message (try
-                    (sqlite-export/build-import
-                     {:pages-and-blocks
-                      [{:page {:block/uuid (:block/uuid page-before)
-                               :build/journal 20250102}}]}
-                     @conn
-                     {:existing-pages-keep-properties? true
-                      :import-edn-data? true})
-                    nil
-                    (catch :default error (ex-message error)))]
-      (is (string/includes? message "journal identify different pages")))))
+           (:block/updated-at (db-test/find-journal-by-journal-day @conn 20250101))))))
 
 (deftest build-import-merges-existing-page-tags-and-aliases
   (let [existing-tag :user.class/ExistingTag
         shared-tag :user.class/SharedTag
+        source-shared-tag :user.class/SourceSharedTag
         imported-tag :user.class/ImportedTag
-        classes {existing-tag {} shared-tag {} imported-tag {}}
+        child-tag :user.class/ChildTag
+        existing-classes {existing-tag {}
+                          shared-tag {:block/title "Shared tag"}}
+        imported-classes {source-shared-tag {:block/title "Shared tag"}
+                          imported-tag {}
+                          child-tag {:build/class-extends [source-shared-tag]}}
         existing-alias-uuid (random-uuid)
         source-existing-alias-uuid (random-uuid)
         shared-alias-uuid (random-uuid)
@@ -1696,7 +1570,7 @@
          {:page {:block/title "Shared alias" :block/uuid shared-alias-uuid :build/keep-uuid? true}}
          {:page {:block/title "Imported alias" :block/uuid imported-alias-uuid :build/keep-uuid? true}}]
         conn (db-test/create-conn-with-blocks
-              {:classes classes
+              {:classes existing-classes
                :pages-and-blocks
                (into alias-pages
                      [{:page {:block/title "Existing page"
@@ -1707,10 +1581,10 @@
                               :block/updated-at 200
                               :block/alias #{[:block/uuid existing-alias-uuid]}}}])})
         import-data
-        {:classes classes
+        {:classes imported-classes
          :pages-and-blocks
          (into [{:page {:block/title "Existing page"
-                        :build/tags #{shared-tag imported-tag}
+                        :build/tags #{source-shared-tag imported-tag}
                         :block/alias #{[:block/uuid shared-alias-uuid]
                                        [:block/uuid imported-alias-uuid]}}}
                 {:page {:block/title "Alias-only page"
@@ -1732,6 +1606,9 @@
              (set aliases)))
       (is (= 3 (count aliases)))
       (is (= 700 (:block/updated-at page))))
+    (is (= #{shared-tag}
+           (set (map :db/ident
+                     (:logseq.property.class/extends (d/entity @conn child-tag))))))
     (let [page (db-test/find-page-by-title @conn "Alias-only page")]
       (is (= #{existing-alias-uuid}
              (set (map :block/uuid (:block/alias page)))))

@@ -1137,34 +1137,24 @@
   (disj existing-page-protected-attributes :block/updated-at :build/keep-uuid?))
 
 (defn- existing-page-entity
-  [db page strict?]
-  (let [uuid-entity (when-let [uuid (:block/uuid page)]
-                      (d/entity db [:block/uuid uuid]))
-        named-entity (if-let [journal-day (:build/journal page)]
-                       (some->> journal-day
-                                (d/datoms db :avet :block/journal-day)
-                                first
-                                :e
-                                (d/entity db))
-                       (some->> (:block/title page) (ldb/get-case-page db)))]
-    (when strict?
-      (when (and uuid-entity (not (entity-util/page? uuid-entity)))
-        (throw (ex-info "Imported page UUID identifies a non-page entity" {})))
-      (when (and uuid-entity (:build/journal page)
-                 (or (nil? named-entity)
-                     (not= (:db/id uuid-entity) (:db/id named-entity))))
-        (throw (ex-info "Imported page UUID and journal identify different pages" {})))
-      (when (and uuid-entity named-entity
-                 (not= (:db/id uuid-entity) (:db/id named-entity)))
-        (throw (ex-info "Imported page UUID and title or journal identify different pages" {}))))
-    (if strict? (or uuid-entity named-entity) named-entity)))
+  [db page import-edn-data?]
+  (or (if-let [journal-day (:build/journal page)]
+        (some->> journal-day
+                 (d/datoms db :avet :block/journal-day)
+                 first
+                 :e
+                 (d/entity db))
+        (some->> (:block/title page) (ldb/get-case-page db)))
+      (when (and import-edn-data?
+                 (nil? (:block/title page))
+                 (nil? (:build/journal page)))
+        (some-> (:block/uuid page)
+                (#(d/entity db [:block/uuid %]))
+                (#(when (entity-util/page? %) %))))))
 
 (defn- record-page-uuid!
   [import-to-existing-page-uuids source-uuid target-uuid]
   (when source-uuid
-    (when-let [previous-target (get @import-to-existing-page-uuids source-uuid)]
-      (when (not= previous-target target-uuid)
-        (throw (ex-info "Imported page UUID maps to multiple existing pages" {}))))
     (swap! import-to-existing-page-uuids assoc source-uuid target-uuid)))
 
 (defn- add-uuid-to-page-if-exists
@@ -1195,10 +1185,11 @@
                                                        (get ident-overrides tag tag))) %)))
                     (and (:block/alias page) import-edn-data?)
                     (update :block/alias
-                            #(set (remove (fn [[attr uuid]]
+                            #(set (remove (fn [[attr page-uuid]]
                                             (and (= :block/uuid attr)
                                                  (contains? existing-alias-uuids
-                                                            (get @import-to-existing-page-uuids uuid uuid))))
+                                                            (get @import-to-existing-page-uuids
+                                                                 page-uuid page-uuid))))
                                           %))))
             page'' (cond-> page'
                      (and import-edn-data? (empty? (:build/properties page'))) (dissoc :build/properties)
@@ -1227,72 +1218,38 @@
                 [k v])))
        (into {})))
 
-(defn- existing-import-property-ident
-  [db existing-pages property-key property]
-  (let [ident-entity (when (qualified-keyword? property-key)
-                       (d/entity db property-key))
-        uuid-entity (when-let [property-uuid (:block/uuid property)]
-                      (d/entity db [:block/uuid property-uuid]))
-        title (or (:block/title property) (name property-key))
+(defn- existing-import-ident
+  [db entity-key entity class-ident entity-type?]
+  (let [ident-entity (when (qualified-keyword? entity-key)
+                       (d/entity db entity-key))
+        uuid-entity (some-> (:block/uuid entity)
+                            (#(d/entity db [:block/uuid %])))
+        title (or (:block/title entity) (name entity-key))
         title-entities (mapv #(d/entity db %)
-                             (ldb/page-exists? db title [:logseq.class/Property]))
-        used-title-entities (filterv (fn [property-entity]
-                                       (some #(contains? % (:db/ident property-entity))
-                                             existing-pages))
-                                     title-entities)
-        title-entity (cond
-                       (= 1 (count used-title-entities)) (first used-title-entities)
-                       (= 1 (count title-entities)) (first title-entities))
-        entities (remove nil? [ident-entity uuid-entity title-entity])]
-    (when (and ident-entity (not (entity-util/property? ident-entity)))
-      (throw (ex-info "Imported property ident identifies a non-property entity" {})))
-    (when (and uuid-entity (not (entity-util/property? uuid-entity)))
-      (throw (ex-info "Imported property UUID identifies a non-property entity" {})))
-    (when (< 1 (count (set (map :db/id entities))))
-      (throw (ex-info "Imported property ident, UUID, and title identify different properties" {})))
-    (:db/ident (first entities))))
-
-(defn- existing-import-class-ident
-  [db existing-pages class-key class]
-  (let [ident-entity (when (qualified-keyword? class-key)
-                       (d/entity db class-key))
-        uuid-entity (when-let [class-uuid (:block/uuid class)]
-                      (d/entity db [:block/uuid class-uuid]))
-        title (or (:block/title class) (name class-key))
-        title-entities (mapv #(d/entity db %)
-                             (ldb/page-exists? db title [:logseq.class/Tag]))
-        used-title-entities
-        (filterv (fn [class-entity]
-                   (some #(contains? (set (keep :db/ident (:block/tags %)))
-                                     (:db/ident class-entity))
-                         existing-pages))
-                 title-entities)
-        title-entity (cond
-                       (= 1 (count used-title-entities)) (first used-title-entities)
-                       (= 1 (count title-entities)) (first title-entities))
-        entities (remove nil? [ident-entity uuid-entity title-entity])]
-    (when (and ident-entity (not (entity-util/class? ident-entity)))
-      (throw (ex-info "Imported class ident identifies a non-class entity" {})))
-    (when (and uuid-entity (not (entity-util/class? uuid-entity)))
-      (throw (ex-info "Imported class UUID identifies a non-class entity" {})))
-    (when (< 1 (count (set (map :db/id entities))))
-      (throw (ex-info "Imported class ident, UUID, and title identify different classes" {})))
-    (:db/ident (first entities))))
+                             (ldb/page-exists? db title [class-ident]))
+        title-entity (when (= 1 (count title-entities))
+                       (first title-entities))]
+    (some (fn [candidate]
+            (when (entity-type? candidate)
+              (:db/ident candidate)))
+          [ident-entity uuid-entity title-entity])))
 
 (defn- import-ident-overrides
-  [db existing-pages properties classes import-options]
+  [db properties classes import-options]
   (when (:import-edn-data? import-options)
     (merge
      (into {}
            (keep (fn [[property-key property]]
-                   (when-let [ident (existing-import-property-ident
-                                     db existing-pages property-key property)]
+                   (when-let [ident (existing-import-ident
+                                     db property-key property
+                                     :logseq.class/Property entity-util/property?)]
                      [property-key ident])))
            properties)
      (into {}
            (keep (fn [[class-key class]]
-                   (when-let [ident (existing-import-class-ident
-                                     db existing-pages class-key class)]
+                   (when-let [ident (existing-import-ident
+                                     db class-key class
+                                     :logseq.class/Tag entity-util/class?)]
                      [class-key ident])))
            classes))))
 
@@ -1306,12 +1263,12 @@
               (keep (fn [{:keys [page]}]
                       (when-let [entity (existing-page-entity
                                          db page (:import-edn-data? import-options))]
-                        (when-let [uuid (:block/uuid page)]
-                          (record-page-uuid! import-to-existing-page-uuids uuid (:block/uuid entity)))
+                        (when-let [page-uuid (:block/uuid page)]
+                          (record-page-uuid! import-to-existing-page-uuids
+                                             page-uuid (:block/uuid entity)))
                         [page entity])))
               pages-and-blocks)
-        ident-overrides (import-ident-overrides db (vals existing-page-entities)
-                                                properties classes import-options)
+        ident-overrides (import-ident-overrides db properties classes import-options)
         export-map
         (cond-> {:build-existing-tx? true
                  :extract-content-refs? false}
