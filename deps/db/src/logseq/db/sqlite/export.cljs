@@ -1130,7 +1130,8 @@
 ;; Import fns
 ;; ==========
 (defn- add-uuid-to-page-if-exists
-  [db import-to-existing-page-uuids {:keys [existing-pages-keep-properties?]} m]
+  [db import-to-existing-page-uuids all-idents
+   {:keys [existing-pages-keep-properties?]} m]
   (if-let [ent (if (:build/journal m)
                  (some->> (:build/journal m)
                           (d/datoms db :avet :block/journal-day)
@@ -1145,17 +1146,18 @@
         (and (:build/properties m) existing-pages-keep-properties?)
         (update :build/properties (fn [props]
                                     (->> props
-                                         (remove (fn [[k _v]] (get ent k)))
+                                         (remove (fn [[k _v]]
+                                                   (contains? ent (get all-idents k k))))
                                          (into {}))))))
     m))
 
 (defn- update-existing-properties
   "Updates existing properties by ident. Also check imported and existing properties have
    the same cardinality and type to avoid failure after import"
-  [db property-conflicts properties]
+  [db property-conflicts all-idents properties]
   (->> properties
        (map (fn [[k v]]
-              (if-let [ent (d/entity db k)]
+              (if-let [ent (d/entity db (get all-idents k k))]
                 (do
                   (when (not= (select-keys ent [:logseq.property/type :db/cardinality])
                               (select-keys v [:logseq.property/type :db/cardinality]))
@@ -1171,25 +1173,27 @@
   "Checks export map for existing entities and adds :block/uuid to them if they exist in graph to import.
    Also checks for property conflicts between existing properties and properties to be imported"
   [db {:keys [pages-and-blocks classes properties] ::keys [export-type import-options] :as export-map} property-conflicts]
-  (let [import-to-existing-page-uuids (atom {})
+  (let [all-idents (sqlite-build/create-all-idents properties classes export-map)
+        import-to-existing-page-uuids (atom {})
         export-map
         (cond-> {:build-existing-tx? true
                  :extract-content-refs? false}
           (seq pages-and-blocks)
           (assoc :pages-and-blocks
                  (mapv (fn [m]
-                         (update m :page (partial add-uuid-to-page-if-exists db import-to-existing-page-uuids import-options)))
+                         (update m :page (partial add-uuid-to-page-if-exists
+                                                  db import-to-existing-page-uuids all-idents import-options)))
                        pages-and-blocks))
           (seq classes)
           (assoc :classes
                  (->> classes
                       (map (fn [[k v]]
-                             (if-let [ent (d/entity db k)]
+                             (if-let [ent (d/entity db (get all-idents k k))]
                                [k (assoc v :block/uuid (:block/uuid ent))]
                                [k v])))
                       (into {})))
           (seq properties)
-          (assoc :properties (update-existing-properties db property-conflicts properties))
+          (assoc :properties (update-existing-properties db property-conflicts all-idents properties))
           ;; Graph exports don't use :build/page so this speeds up build
           (#{:graph :graph-human} export-type)
           (assoc :translate-property-values? false)
@@ -1201,7 +1205,8 @@
                       (walk/postwalk (fn [f]
                                        (if (and (vector? f) (= :build/page (first f)))
                                          [:build/page
-                                          (add-uuid-to-page-if-exists db import-to-existing-page-uuids import-options (second f))]
+                                          (add-uuid-to-page-if-exists
+                                           db import-to-existing-page-uuids all-idents import-options (second f))]
                                          f))
                                      export-map))
         ;; Update uuid references of all pages that had their uuids updated to reference an existing page
@@ -1223,7 +1228,9 @@
         pages-and-blocks
         [{:page (select-keys (:block/page block) [:block/uuid])
           :blocks [(dissoc block :block/page)]}]]
-    (merge-export-maps export-map {:pages-and-blocks pages-and-blocks})))
+    (cond-> (merge-export-maps export-map {:pages-and-blocks pages-and-blocks})
+      (contains? export-map ::import-options)
+      (assoc ::import-options (::import-options export-map)))))
 
 (defn- current-db-retract-tx
   [db]
@@ -1300,15 +1307,20 @@
    * :init-tx - Txs that must be transacted first, usually because they define new properties
    * :block-props-tx - Txs to transact after :init-tx, usually because they use newly defined properties
    * :misc-tx - Txs to transact unrelated to other txs"
-  [export-map* db {:keys [current-block]}]
+  [export-map* db {:keys [current-block] :as import-options}]
   (cond
     (datom-export? export-map*)
     (build-datom-import export-map* db)
 
     :else
-    (let [export-map (if (and (::block export-map*) current-block)
-                       (build-block-import-options current-block export-map*)
-                       export-map*)
+    (let [export-map-with-options
+          (cond-> export-map*
+            (contains? import-options :existing-pages-keep-properties?)
+            (assoc-in [::import-options :existing-pages-keep-properties?]
+                      (:existing-pages-keep-properties? import-options)))
+          export-map (if (and (::block export-map-with-options) current-block)
+                       (build-block-import-options current-block export-map-with-options)
+                       export-map-with-options)
           export-map' (if (and (#{:graph :graph-human} (::export-type export-map*)) (seq (::auto-include-namespaces export-map*)))
                         (merge (dissoc export-map :properties ::auto-include-namespaces)
                                (add-ontology-for-include-namespaces db export-map))

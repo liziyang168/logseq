@@ -1397,6 +1397,38 @@
                                {:logseq.property/description "first description"
                                 :logseq.property/exclude-from-graph-view true})))
 
+(deftest build-import-preserves-existing-page-properties
+  (let [properties {:existing-text {:logseq.property/type :default
+                                    :db/cardinality :db.cardinality/one}
+                    :existing-checkbox {:logseq.property/type :checkbox
+                                        :db/cardinality :db.cardinality/one}
+                    :imported-text {:logseq.property/type :default
+                                    :db/cardinality :db.cardinality/one}}
+        conn (db-test/create-conn-with-blocks
+              {:properties properties
+               :pages-and-blocks
+               [{:page {:block/title "Existing page"
+                        :build/properties {:existing-text "Existing"
+                                           :existing-checkbox false}}}]})
+        import-data
+        {:properties properties
+         :pages-and-blocks
+         [{:page {:block/title "Existing page"
+                  :build/properties {:existing-text "Imported"
+                                     :existing-checkbox true
+                                     :imported-text "Added"}}
+           :blocks [{:block/title "Imported child"}]}]}
+        txs (sqlite-export/build-import
+             import-data @conn {:existing-pages-keep-properties? true})]
+    (d/transact! conn (sqlite-export/import-tx-data txs))
+    (let [page (db-test/find-page-by-title @conn "Existing page")
+          properties' (db-test/readable-properties page)]
+      (is (= "Existing" (:user.property/existing-text properties')))
+      (is (false? (:user.property/existing-checkbox properties')))
+      (is (= "Added" (:user.property/imported-text properties')))
+      (is (= (:db/id page)
+             (:db/id (:block/page (db-test/find-block-by-content @conn "Imported child"))))))))
+
 (deftest build-export-omits-empty-build-properties
   (let [conn (db-test/create-conn-with-blocks
               {:properties {:user.property/p1 {:logseq.property/type :default}}
