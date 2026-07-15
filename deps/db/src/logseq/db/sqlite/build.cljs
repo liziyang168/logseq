@@ -603,7 +603,7 @@
 ;; TODO: How to detect these idents don't conflict with existing? :db/add?
 (defn create-all-idents
   "Creates canonical DB idents for the imported `properties` and `classes`."
-  [properties classes {:keys [graph-namespace]}]
+  [properties classes {:keys [graph-namespace] ::keys [ident-overrides]}]
   (let [create-property-ident (if graph-namespace
                                 (fn create-property-ident [kw]
                                   (db-ident/create-db-ident-from-name (str (name graph-namespace) ".property")
@@ -616,7 +616,8 @@
                                       (db-ident/create-db-ident-from-name (namespace kw) (name kw)))
                                     (db-property/create-user-property-ident-from-name (name kw)))))
         property-idents (->> (keys properties)
-                             (map #(vector % (create-property-ident %)))
+                             (map #(vector % (or (get ident-overrides %)
+                                                (create-property-ident %))))
                              (into {}))
         _ (assert (= (count (set (vals property-idents))) (count properties))
                   (str "All property db-idents must be unique but the following are duplicates: "
@@ -1009,10 +1010,14 @@
    supported: :default, :url, :checkbox, :number, :node and :date. :checkbox and
    :number values are written as booleans and integers/floats. :node references
    are written as vectors e.g. `[:build/page {:block/title \"PAGE NAME\"}]`"
-  [options*]
-  (let [options (merge {:extract-content-refs? true :translate-property-values? true} options*)]
-    (validate-options options)
-    (build-blocks-tx* options)))
+  ([options*]
+   (build-blocks-tx options* nil))
+  ([options* ident-overrides]
+   (let [options (merge {:extract-content-refs? true :translate-property-values? true} options*)]
+     (validate-options options)
+     (build-blocks-tx* (cond-> options
+                         (seq ident-overrides)
+                         (assoc ::ident-overrides ident-overrides))))))
 
 (defn create-blocks
   "Builds txs with build-blocks-tx and transacts them. Also provides a shorthand

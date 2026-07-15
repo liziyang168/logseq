@@ -1224,12 +1224,41 @@
                 [k v])))
        (into {})))
 
+(defn- existing-import-property-ident
+  [db existing-pages property-key property]
+  (let [ident-entity (when (qualified-keyword? property-key)
+                       (d/entity db property-key))
+        uuid-entity (when-let [property-uuid (:block/uuid property)]
+                      (d/entity db [:block/uuid property-uuid]))
+        title (or (:block/title property) (name property-key))
+        title-entities (mapv #(d/entity db %)
+                             (ldb/page-exists? db title [:logseq.class/Property]))
+        used-title-entities (filterv (fn [property-entity]
+                                       (some #(contains? % (:db/ident property-entity))
+                                             existing-pages))
+                                     title-entities)
+        title-entity (cond
+                       (= 1 (count used-title-entities)) (first used-title-entities)
+                       (= 1 (count title-entities)) (first title-entities))
+        entity (some #(when (entity-util/property? %) %)
+                     [ident-entity uuid-entity title-entity])]
+    (:db/ident entity)))
+
+(defn- import-ident-overrides
+  [db existing-pages properties import-options]
+  (when (:import-edn-data? import-options)
+    (into {}
+          (keep (fn [[property-key property]]
+                  (when-let [ident (existing-import-property-ident
+                                    db existing-pages property-key property)]
+                    [property-key ident])))
+          properties)))
+
 (defn- check-for-existing-entities
   "Checks export map for existing entities and adds :block/uuid to them if they exist in graph to import.
    Also checks for property conflicts between existing properties and properties to be imported"
   [db {:keys [pages-and-blocks classes properties] ::keys [export-type import-options] :as export-map} property-conflicts]
-  (let [all-idents (sqlite-build/create-all-idents properties classes export-map)
-        import-to-existing-page-uuids (atom {})
+  (let [import-to-existing-page-uuids (atom {})
         existing-page-entities
         (into {}
               (keep (fn [{:keys [page]}]
@@ -1239,9 +1268,17 @@
                           (record-page-uuid! import-to-existing-page-uuids uuid (:block/uuid entity)))
                         [page entity])))
               pages-and-blocks)
+        ident-overrides (import-ident-overrides db (vals existing-page-entities)
+                                                properties import-options)
+        build-options (cond-> export-map
+                        (seq ident-overrides)
+                        (assoc ::sqlite-build/ident-overrides ident-overrides))
+        all-idents (sqlite-build/create-all-idents properties classes build-options)
         export-map
         (cond-> {:build-existing-tx? true
                  :extract-content-refs? false}
+          (seq ident-overrides)
+          (assoc ::ident-overrides ident-overrides)
           (seq pages-and-blocks)
           (assoc :pages-and-blocks
                  (mapv (fn [m]
@@ -1405,11 +1442,13 @@
           {:error (str "The following imported properties conflict with the current graph: "
                        (pr-str (mapv :property-id @property-conflicts)))})
         (if (#{:graph :graph-human} (::export-type export-map''))
-          (-> (sqlite-build/build-blocks-tx (remove-namespaced-keys export-map''))
+          (-> (sqlite-build/build-blocks-tx (remove-namespaced-keys export-map'')
+                                            (::ident-overrides export-map''))
               (assoc :misc-tx (vec (concat (::graph-files export-map'')
                                            (::kv-values export-map'')
                                            (::property-history export-map'')))))
-          (sqlite-build/build-blocks-tx (remove-namespaced-keys export-map'')))))))
+          (sqlite-build/build-blocks-tx (remove-namespaced-keys export-map'')
+                                        (::ident-overrides export-map'')))))))
 
 (defn import-tx-data
   [{:keys [init-tx block-props-tx misc-tx]}]

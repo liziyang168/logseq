@@ -1414,20 +1414,35 @@
                                 :logseq.property/exclude-from-graph-view true})))
 
 (deftest build-import-preserves-existing-page-properties
-  (let [properties {:existing-text {:logseq.property/type :default
-                                    :db/cardinality :db.cardinality/one}
-                    :existing-checkbox {:logseq.property/type :checkbox
-                                        :db/cardinality :db.cardinality/one}
-                    :imported-text {:logseq.property/type :default
-                                    :db/cardinality :db.cardinality/one}}
+  (let [existing-text-ident :user.property/existing-text-source
+        existing-checkbox-ident :user.property/existing-checkbox-source
+        unused-text-ident :user.property/existing-text-unused
+        unused-checkbox-ident :user.property/existing-checkbox-unused
         conn (db-test/create-conn-with-blocks
-              {:properties properties
+              {:properties
+               {existing-text-ident {:block/title "existing-text"
+                                     :logseq.property/type :default
+                                     :db/cardinality :db.cardinality/one}
+                existing-checkbox-ident {:block/title "existing-checkbox"
+                                          :logseq.property/type :checkbox
+                                          :db/cardinality :db.cardinality/one}
+                unused-text-ident {:block/title "existing-text"
+                                   :logseq.property/type :default
+                                   :db/cardinality :db.cardinality/one}
+                unused-checkbox-ident {:block/title "existing-checkbox"
+                                       :logseq.property/type :checkbox
+                                       :db/cardinality :db.cardinality/one}}
                :pages-and-blocks
                [{:page {:block/title "Existing page"
-                        :build/properties {:existing-text "Existing"
-                                           :existing-checkbox false}}}]})
+                        :build/properties {existing-text-ident "Existing"
+                                           existing-checkbox-ident false}}}]})
         import-data
-        {:properties properties
+        {:properties {:existing-text {:logseq.property/type :default
+                                      :db/cardinality :db.cardinality/one}
+                      :existing-checkbox {:logseq.property/type :checkbox
+                                          :db/cardinality :db.cardinality/one}
+                      :imported-text {:logseq.property/type :default
+                                      :db/cardinality :db.cardinality/one}}
          :pages-and-blocks
          [{:page {:block/title "Existing page"
                   :build/properties {:existing-text "Imported"
@@ -1440,9 +1455,11 @@
     (d/transact! conn (sqlite-export/import-tx-data txs))
     (let [page (db-test/find-page-by-title @conn "Existing page")
           properties' (db-test/readable-properties page)]
-      (is (= "Existing" (:user.property/existing-text properties')))
-      (is (false? (:user.property/existing-checkbox properties')))
+      (is (= "Existing" (get properties' existing-text-ident)))
+      (is (false? (get properties' existing-checkbox-ident)))
       (is (= "Added" (:user.property/imported-text properties')))
+      (is (= 2 (count (ldb/page-exists? @conn "existing-text" [:logseq.class/Property]))))
+      (is (= 2 (count (ldb/page-exists? @conn "existing-checkbox" [:logseq.class/Property]))))
       (is (= (:db/id page)
              (:db/id (:block/page (db-test/find-block-by-content @conn "Imported child"))))))))
 
