@@ -618,13 +618,25 @@
     (is (not (some #{[:db/add (:db/id plugin-property-ent) :public? false]} tx-data)))))
 
 (deftest import-edn-data-rejects-zero-transaction
-  (let [conn (sqlite-export/create-conn)
+  (let [conn (db-test/create-conn-with-blocks
+              {:pages-and-blocks [{:page {:block/title "Existing page"}}]})
         result (sqlite-export/validate-import-txs
                 (sqlite-export/build-import {:pages-and-blocks []} @conn {})
                 @conn
-                {:import-edn-data? true})]
+                {:import-edn-data? true})
+        no-change-result
+        (sqlite-export/validate-import-txs
+         (sqlite-export/build-import
+          {:pages-and-blocks [{:page {:block/title "Existing page"}}]}
+          @conn
+          {:existing-pages-keep-properties? true
+           :import-edn-data? true})
+         @conn
+         {:import-edn-data? true})]
     (is (= "The imported EDN does not contain any importable data."
-           (:error result)))))
+           (:error result)))
+    (is (= "The imported EDN does not contain any importable data."
+           (:error no-change-result)))))
 
 (deftest import-edn-data-validates-unsupported-attributes
   (let [conn (sqlite-export/create-conn)
@@ -1393,7 +1405,8 @@
                                {:logseq.property/description "second description"
                                 :logseq.property/exclude-from-graph-view true}))
   (testing "With ::existing-pages-keep-properties?, existing properties on existing pages are not overwritten by imported data"
-    (test-import-existing-page {:existing-pages-keep-properties? true}
+    (test-import-existing-page {:existing-pages-keep-properties? true
+                                :import-edn-data? true}
                                {:logseq.property/description "first description"
                                 :logseq.property/exclude-from-graph-view true})))
 
@@ -1428,6 +1441,54 @@
       (is (= "Added" (:user.property/imported-text properties')))
       (is (= (:db/id page)
              (:db/id (:block/page (db-test/find-block-by-content @conn "Imported child"))))))))
+
+(deftest build-import-resolves-existing-page-by-uuid
+  (let [property-id :user.property/status
+        properties {property-id {:logseq.property/type :default
+                                 :db/cardinality :db.cardinality/one}}
+        conn (db-test/create-conn-with-blocks
+              {:properties properties
+               :pages-and-blocks
+               [{:page {:block/title "Existing page"
+                        :build/properties {property-id "Existing"}}}
+                {:page {:block/title "Other page"}}]})
+        page (db-test/find-page-by-title @conn "Existing page")
+        import-data
+        {:properties properties
+         :pages-and-blocks
+         [{:page {:block/uuid (:block/uuid page)
+                  :block/title "Imported title"
+                  :build/properties {property-id "Imported"}}}]}
+        txs (sqlite-export/build-import
+             import-data @conn {:existing-pages-keep-properties? true
+                                :import-edn-data? true})]
+    (d/transact! conn (sqlite-export/import-tx-data txs))
+    (let [page' (d/entity @conn [:block/uuid (:block/uuid page)])]
+      (is (= "Existing page" (:block/title page')))
+      (is (= "Existing" (get (db-test/readable-properties page') property-id))))
+    (let [message (try
+                    (sqlite-export/build-import
+                     {:pages-and-blocks
+                      [{:page {:block/uuid (:block/uuid page)
+                               :block/title "Other page"}}]}
+                     @conn
+                     {:existing-pages-keep-properties? true
+                      :import-edn-data? true})
+                    nil
+                    (catch :default error (ex-message error)))]
+      (is (string/includes? message "identify different pages")))
+    (let [source-uuid (random-uuid)
+          message (try
+                    (sqlite-export/build-import
+                     {:pages-and-blocks
+                      [{:page {:block/uuid source-uuid :block/title "Existing page"}}
+                       {:page {:block/uuid source-uuid :block/title "Other page"}}]}
+                     @conn
+                     {:existing-pages-keep-properties? true
+                      :import-edn-data? true})
+                    nil
+                    (catch :default error (ex-message error)))]
+      (is (string/includes? message "maps to multiple existing pages")))))
 
 (deftest build-import-preserves-existing-page-metadata
   (let [property-id :user.property/imported-text
@@ -1468,7 +1529,18 @@
       (is (= "Added" (get (db-test/readable-properties page) property-id))))
     (import! 600)
     (is (= 500
-           (:block/updated-at (db-test/find-journal-by-journal-day @conn 20250101))))))
+           (:block/updated-at (db-test/find-journal-by-journal-day @conn 20250101))))
+    (let [message (try
+                    (sqlite-export/build-import
+                     {:pages-and-blocks
+                      [{:page {:block/uuid (:block/uuid page-before)
+                               :build/journal 20250102}}]}
+                     @conn
+                     {:existing-pages-keep-properties? true
+                      :import-edn-data? true})
+                    nil
+                    (catch :default error (ex-message error)))]
+      (is (string/includes? message "journal identify different pages")))))
 
 (deftest build-import-merges-existing-page-tags-and-aliases
   (let [existing-tag :user.class/ExistingTag
@@ -1476,6 +1548,7 @@
         imported-tag :user.class/ImportedTag
         classes {existing-tag {} shared-tag {} imported-tag {}}
         existing-alias-uuid (random-uuid)
+        source-existing-alias-uuid (random-uuid)
         shared-alias-uuid (random-uuid)
         imported-alias-uuid (random-uuid)
         alias-pages
@@ -1491,6 +1564,7 @@
                               :block/alias #{[:block/uuid existing-alias-uuid]
                                              [:block/uuid shared-alias-uuid]}}}
                       {:page {:block/title "Alias-only page"
+                              :block/updated-at 200
                               :block/alias #{[:block/uuid existing-alias-uuid]}}}])})
         import-data
         {:classes classes
@@ -1500,8 +1574,8 @@
                         :block/alias #{[:block/uuid shared-alias-uuid]
                                        [:block/uuid imported-alias-uuid]}}}
                 {:page {:block/title "Alias-only page"
-                        :block/alias #{[:block/uuid imported-alias-uuid]}}}]
-               alias-pages)}]
+                        :block/alias #{[:block/uuid source-existing-alias-uuid]}}}]
+               (assoc-in alias-pages [0 :page :block/uuid] source-existing-alias-uuid))}]
     (with-redefs [common-util/time-ms (constantly 700)]
       (let [txs (sqlite-export/build-import
                  import-data @conn {:existing-pages-keep-properties? true})]
@@ -1518,9 +1592,9 @@
       (is (= 3 (count aliases)))
       (is (= 700 (:block/updated-at page))))
     (let [page (db-test/find-page-by-title @conn "Alias-only page")]
-      (is (= #{existing-alias-uuid imported-alias-uuid}
+      (is (= #{existing-alias-uuid}
              (set (map :block/uuid (:block/alias page)))))
-      (is (= 700 (:block/updated-at page))))))
+      (is (= 200 (:block/updated-at page))))))
 
 (deftest build-export-omits-empty-build-properties
   (let [conn (db-test/create-conn-with-blocks

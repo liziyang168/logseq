@@ -1136,49 +1136,74 @@
 (def ^:private existing-page-preserved-attributes
   (disj existing-page-protected-attributes :block/updated-at :build/keep-uuid?))
 
+(defn- existing-page-entity
+  [db page strict?]
+  (let [uuid-entity (when-let [uuid (:block/uuid page)]
+                      (d/entity db [:block/uuid uuid]))
+        named-entity (if-let [journal-day (:build/journal page)]
+                       (some->> journal-day
+                                (d/datoms db :avet :block/journal-day)
+                                first
+                                :e
+                                (d/entity db))
+                       (some->> (:block/title page) (ldb/get-case-page db)))]
+    (when strict?
+      (when (and uuid-entity (not (entity-util/page? uuid-entity)))
+        (throw (ex-info "Imported page UUID identifies a non-page entity" {})))
+      (when (and uuid-entity (:build/journal page)
+                 (or (nil? named-entity)
+                     (not= (:db/id uuid-entity) (:db/id named-entity))))
+        (throw (ex-info "Imported page UUID and journal identify different pages" {})))
+      (when (and uuid-entity named-entity
+                 (not= (:db/id uuid-entity) (:db/id named-entity)))
+        (throw (ex-info "Imported page UUID and title or journal identify different pages" {}))))
+    (if strict? (or uuid-entity named-entity) named-entity)))
+
+(defn- record-page-uuid!
+  [import-to-existing-page-uuids source-uuid target-uuid]
+  (when source-uuid
+    (when-let [previous-target (get @import-to-existing-page-uuids source-uuid)]
+      (when (not= previous-target target-uuid)
+        (throw (ex-info "Imported page UUID maps to multiple existing pages" {}))))
+    (swap! import-to-existing-page-uuids assoc source-uuid target-uuid)))
+
 (defn- add-uuid-to-page-if-exists
-  [db import-to-existing-page-uuids all-idents
-   {:keys [existing-pages-keep-properties?]} m]
-  (if-let [ent (if (:build/journal m)
-                 (some->> (:build/journal m)
-                          (d/datoms db :avet :block/journal-day)
-                          first
-                          :e
-                          (d/entity db))
-                 ;; TODO: For now only check page uniqueness by title. Could handle more uniqueness checks later
-                 (some->> (:block/title m) (ldb/get-case-page db)))]
+  [db import-to-existing-page-uuids existing-page-entities all-idents
+   {:keys [existing-pages-keep-properties? import-edn-data?]} m]
+  (if-let [ent (or (get existing-page-entities m)
+                   (existing-page-entity db m import-edn-data?))]
     (do
-      (swap! import-to-existing-page-uuids assoc (:block/uuid m) (:block/uuid ent))
+      (record-page-uuid! import-to-existing-page-uuids (:block/uuid m) (:block/uuid ent))
       (let [existing-tag-idents (set (keep :db/ident (:block/tags ent)))
             existing-alias-uuids (set (map :block/uuid (:block/alias ent)))
             page (if existing-pages-keep-properties?
                    (-> (apply dissoc m existing-page-protected-attributes)
                        (merge (select-keys ent existing-page-preserved-attributes))
                        (assoc :block/uuid (:block/uuid ent)))
-                   (assoc m :block/uuid (:block/uuid ent)))]
-        (let [page' (cond-> page
-                      (and (:build/properties page) existing-pages-keep-properties?)
-                      (update :build/properties (fn [props]
-                                                  (->> props
-                                                       (remove (fn [[k _v]]
-                                                                 (contains? ent (get all-idents k k))))
-                                                       (into {}))))
-                      (and (:build/tags page) existing-pages-keep-properties?)
-                      (update :build/tags
-                              #(set (remove (fn [tag]
-                                              (contains? existing-tag-idents
-                                                         (get all-idents tag tag))) %)))
-                      (and (:block/alias page) existing-pages-keep-properties?)
-                      (update :block/alias
-                              #(set (remove (fn [[attr uuid]]
-                                              (and (= :block/uuid attr)
-                                                   (contains? existing-alias-uuids
-                                                              (get @import-to-existing-page-uuids uuid uuid))))
-                                            %))))]
-          (cond-> page'
-            (empty? (:build/properties page')) (dissoc :build/properties)
-            (empty? (:build/tags page')) (dissoc :build/tags)
-            (empty? (:block/alias page')) (dissoc :block/alias)))))
+                   (assoc m :block/uuid (:block/uuid ent)))
+            page' (cond-> page
+                    (and (:build/properties page) existing-pages-keep-properties?)
+                    (update :build/properties (fn [props]
+                                                (->> props
+                                                     (remove (fn [[k _v]]
+                                                               (contains? ent (get all-idents k k))))
+                                                     (into {}))))
+                    (and (:build/tags page) existing-pages-keep-properties?)
+                    (update :build/tags
+                            #(set (remove (fn [tag]
+                                            (contains? existing-tag-idents
+                                                       (get all-idents tag tag))) %)))
+                    (and (:block/alias page) existing-pages-keep-properties?)
+                    (update :block/alias
+                            #(set (remove (fn [[attr uuid]]
+                                            (and (= :block/uuid attr)
+                                                 (contains? existing-alias-uuids
+                                                            (get @import-to-existing-page-uuids uuid uuid))))
+                                          %))))]
+        (cond-> page'
+          (empty? (:build/properties page')) (dissoc :build/properties)
+          (empty? (:build/tags page')) (dissoc :build/tags)
+          (empty? (:block/alias page')) (dissoc :block/alias))))
     m))
 
 (defn- update-existing-properties
@@ -1205,6 +1230,15 @@
   [db {:keys [pages-and-blocks classes properties] ::keys [export-type import-options] :as export-map} property-conflicts]
   (let [all-idents (sqlite-build/create-all-idents properties classes export-map)
         import-to-existing-page-uuids (atom {})
+        existing-page-entities
+        (into {}
+              (keep (fn [{:keys [page]}]
+                      (when-let [entity (existing-page-entity
+                                         db page (:import-edn-data? import-options))]
+                        (when-let [uuid (:block/uuid page)]
+                          (record-page-uuid! import-to-existing-page-uuids uuid (:block/uuid entity)))
+                        [page entity])))
+              pages-and-blocks)
         export-map
         (cond-> {:build-existing-tx? true
                  :extract-content-refs? false}
@@ -1212,7 +1246,8 @@
           (assoc :pages-and-blocks
                  (mapv (fn [m]
                          (update m :page (partial add-uuid-to-page-if-exists
-                                                  db import-to-existing-page-uuids all-idents import-options)))
+                                                  db import-to-existing-page-uuids
+                                                  existing-page-entities all-idents import-options)))
                        pages-and-blocks))
           (seq classes)
           (assoc :classes
@@ -1236,7 +1271,8 @@
                                        (if (and (vector? f) (= :build/page (first f)))
                                          [:build/page
                                           (add-uuid-to-page-if-exists
-                                           db import-to-existing-page-uuids all-idents import-options (second f))]
+                                           db import-to-existing-page-uuids existing-page-entities
+                                           all-idents import-options (second f))]
                                          f))
                                      export-map))
         ;; Update uuid references of all pages that had their uuids updated to reference an existing page
@@ -1343,11 +1379,17 @@
     (build-datom-import export-map* db)
 
     :else
-    (let [export-map-with-options
-          (cond-> export-map*
+    (let [export-map-base (cond-> export-map*
+                            (contains? export-map* ::import-options)
+                            (update ::import-options dissoc :import-edn-data?))
+          export-map-with-options
+          (cond-> export-map-base
             (contains? import-options :existing-pages-keep-properties?)
             (assoc-in [::import-options :existing-pages-keep-properties?]
-                      (:existing-pages-keep-properties? import-options)))
+                      (:existing-pages-keep-properties? import-options))
+            (contains? import-options :import-edn-data?)
+            (assoc-in [::import-options :import-edn-data?]
+                      (:import-edn-data? import-options)))
           export-map (if (and (::block export-map-with-options) current-block)
                        (build-block-import-options current-block export-map-with-options)
                        export-map-with-options)
@@ -1441,7 +1483,8 @@
   [txs db edn-label import-edn-data?]
   (loop [tx-data (cond-> (import-tx-data txs)
                    import-edn-data? remove-legacy-disallowed-attributes)]
-    (let [db-after (:db-after (d/with db tx-data))
+    (let [tx-report (d/with db tx-data)
+          db-after (:db-after tx-report)
           validation (db-validate/validate-local-db! db-after)]
       (if-let [errors (seq (:errors validation))]
         (let [eid->attrs (disallowed-key-attrs errors)
@@ -1454,8 +1497,10 @@
             {:error (str "The " edn-label " has " (count errors) " validation error(s): "
                          (validation-error-details errors))
              :errors errors}))
-        {:db db-after
-         :tx-data tx-data}))))
+        (if (and import-edn-data? (empty? (:tx-data tx-report)))
+          {:error "The imported EDN does not contain any importable data."}
+          {:db db-after
+           :tx-data tx-data})))))
 
 (defn validate-import-txs
   "Dry-runs import txs against db and validates the resulting local DB.
