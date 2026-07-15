@@ -117,7 +117,7 @@
           notifications (atom [])
           close-count (atom 0)
           request-count (atom 0)
-          request (p/deferred)
+          request (atom (p/deferred))
           button-element #js {:disabled false}
           export-map {:pages-and-blocks [{:page {:block/title "Page"}}]}]
       (-> (p/with-redefs
@@ -132,7 +132,7 @@
                                    (swap! notifications conj [content status]))
              db-transact/apply-outliner-ops (fn [& _]
                                               (swap! request-count inc)
-                                              request)]
+                                              @request)]
             (db-import/import-edn-data-dialog)
             (let [[_ _ textarea button] @dialog-content
                   click! (:on-click (second button))]
@@ -141,13 +141,22 @@
               (let [result (click! #js {:currentTarget button-element})]
                 (click! #js {:currentTarget button-element})
                 (is (true? (.-disabled button-element)))
-                (p/resolve! request {:error "Unsupported attribute :sample/field"})
-                result)))
-          (p/then (fn []
-                    (is (= 1 @request-count))
-                    (is (false? (.-disabled button-element)))
-                    (is (= [["Unsupported attribute :sample/field" :error]]
-                           @notifications))
-                    (is (zero? @close-count))))
+                (p/resolve! @request {:error "Unsupported attribute :sample/field"})
+                (-> result
+                    (p/then (fn []
+                              (is (= 1 @request-count))
+                              (is (false? (.-disabled button-element)))
+                              (is (= [["Unsupported attribute :sample/field" :error]]
+                                     @notifications))
+                              (is (zero? @close-count))
+                              (reset! request (p/deferred))
+                              (let [result' (submit-dialog! dialog-content export-map button-element)]
+                                (p/reject! @request (js/Error. "Worker unavailable"))
+                                result')))
+                    (p/then (fn []
+                              (is (= 2 @request-count))
+                              (is (false? (.-disabled button-element)))
+                              (is (= ["Worker unavailable" :error] (last @notifications)))
+                              (is (zero? @close-count))))))))
           (p/catch (fn [error] (is false (str error))))
           (p/finally done)))))
