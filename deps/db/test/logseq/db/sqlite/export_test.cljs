@@ -1,6 +1,7 @@
 (ns logseq.db.sqlite.export-test
   (:require [cljs.pprint]
             [cljs.test :refer [deftest is testing]]
+            [clojure.string :as string]
             [clojure.walk :as walk]
             [datascript.core :as d]
             [logseq.common.config :as common-config]
@@ -624,6 +625,29 @@
                 {:import-edn-data? true})]
     (is (= "The imported EDN does not contain any importable data."
            (:error result)))))
+
+(deftest import-edn-data-validates-unsupported-attributes
+  (let [conn (sqlite-export/create-conn)
+        validate (fn [page]
+                   (sqlite-export/validate-import-txs
+                    (sqlite-export/build-import {:pages-and-blocks [{:page page}]} @conn {})
+                    @conn
+                    {:import-edn-data? true}))
+        legacy-result (validate {:block/title "Legacy attributes"
+                                 :hide? true
+                                 :public? false})
+        unsupported-attr :plugin.schema/unsupported-field
+        invalid-result (validate {:block/title "Unsupported attribute"
+                                  unsupported-attr true})
+        invalid-type-result (validate {:block/title "Invalid attribute"
+                                       :block/collapsed? "yes"})]
+    (is (nil? (:error legacy-result)))
+    (is (not-any? #(contains? % :hide?) (:tx-data legacy-result)))
+    (is (not-any? #(contains? % :public?) (:tx-data legacy-result)))
+    (is (string/includes? (:error invalid-result) "Unsupported attribute"))
+    (is (string/includes? (:error invalid-result) (str unsupported-attr)))
+    (is (string/includes? (:error invalid-type-result) ":block/collapsed?"))
+    (is (string/includes? (:error invalid-type-result) "should be a boolean"))))
 
 (deftest graph-export-keeps-referenced-recycled-closed-value-config
   (let [property-id :plugin.property.degrande-colors/tldraw

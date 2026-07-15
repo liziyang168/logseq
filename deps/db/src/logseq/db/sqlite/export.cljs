@@ -1364,19 +1364,53 @@
                  (contains? (get eid->attrs (second tx)) (nth tx 2))))
           tx-data))
 
+(def ^:private legacy-disallowed-attributes
+  #{:hide? :public?})
+
+(defn- remove-legacy-disallowed-attributes
+  [tx-data]
+  (into []
+        (keep (fn [tx]
+                (cond
+                  (map? tx)
+                  (apply dissoc tx legacy-disallowed-attributes)
+
+                  (and (vector? tx)
+                       (= :db/add (first tx))
+                       (contains? legacy-disallowed-attributes (nth tx 2 nil)))
+                  nil
+
+                  :else
+                  tx)))
+        tx-data))
+
+(defn- validation-error-details
+  [errors]
+  (->> errors
+       (mapcat (fn [{:keys [entity] entity-errors :errors}]
+                 (map (fn [[attr error]]
+                        (str (pr-str (or (:block/title entity) (:db/ident entity) (:db/id entity)))
+                             " " (pr-str attr) ": "
+                             (string/join ", " (filter string? (tree-seq coll? seq error)))))
+                      entity-errors)))
+       (string/join "; ")))
+
 (defn- validate-import-tx-data
-  [txs db edn-label]
-  (loop [tx-data (import-tx-data txs)]
+  [txs db edn-label import-edn-data?]
+  (loop [tx-data (cond-> (import-tx-data txs)
+                   import-edn-data? remove-legacy-disallowed-attributes)]
     (let [db-after (:db-after (d/with db tx-data))
           validation (db-validate/validate-local-db! db-after)]
       (if-let [errors (seq (:errors validation))]
         (let [eid->attrs (disallowed-key-attrs errors)
               tx-data' (remove-disallowed-key-datoms tx-data eid->attrs)]
-          (if (and (all-disallowed-key-errors? errors)
+          (if (and (not import-edn-data?)
+                   (all-disallowed-key-errors? errors)
                    (seq eid->attrs)
                    (not= (count tx-data) (count tx-data')))
             (recur (vec tx-data'))
-            {:error (str "The " edn-label " has " (count errors) " validation error(s)")
+            {:error (str "The " edn-label " has " (count errors) " validation error(s): "
+                         (validation-error-details errors))
              :errors errors}))
         {:db db-after
          :tx-data tx-data}))))
@@ -1393,7 +1427,7 @@
      (try
        (let [tx-data (import-tx-data txs)
              result (when (seq tx-data)
-                      (validate-import-tx-data txs db edn-label))]
+                      (validate-import-tx-data txs db edn-label import-edn-data?))]
          (cond
            (and import-edn-data? (empty? tx-data))
            {:error "The imported EDN does not contain any importable data."}
