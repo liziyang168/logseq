@@ -601,8 +601,7 @@
     props-to-values))
 
 ;; TODO: How to detect these idents don't conflict with existing? :db/add?
-(defn create-all-idents
-  "Creates canonical DB idents for the imported `properties` and `classes`."
+(defn- create-all-idents
   [properties classes {:keys [graph-namespace] ::keys [ident-overrides]}]
   (let [create-property-ident (if graph-namespace
                                 (fn create-property-ident [kw]

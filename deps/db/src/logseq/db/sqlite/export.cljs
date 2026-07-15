@@ -1168,7 +1168,7 @@
     (swap! import-to-existing-page-uuids assoc source-uuid target-uuid)))
 
 (defn- add-uuid-to-page-if-exists
-  [db import-to-existing-page-uuids existing-page-entities all-idents
+  [db import-to-existing-page-uuids existing-page-entities ident-overrides
    {:keys [existing-pages-keep-properties? import-edn-data?]} m]
   (if-let [ent (or (get existing-page-entities m)
                    (existing-page-entity db m import-edn-data?))]
@@ -1186,13 +1186,13 @@
                     (update :build/properties (fn [props]
                                                 (->> props
                                                      (remove (fn [[k _v]]
-                                                               (contains? ent (get all-idents k k))))
+                                                               (contains? ent (get ident-overrides k k))))
                                                      (into {}))))
                     (and (:build/tags page) import-edn-data?)
                     (update :build/tags
                             #(set (remove (fn [tag]
                                             (contains? existing-tag-idents
-                                                       (get all-idents tag tag))) %)))
+                                                       (get ident-overrides tag tag))) %)))
                     (and (:block/alias page) import-edn-data?)
                     (update :block/alias
                             #(set (remove (fn [[attr uuid]]
@@ -1209,10 +1209,10 @@
 (defn- update-existing-properties
   "Updates existing properties by ident. Also check imported and existing properties have
    the same cardinality and type to avoid failure after import"
-  [db property-conflicts all-idents properties]
+  [db property-conflicts ident-overrides properties]
   (->> properties
        (map (fn [[k v]]
-              (if-let [ent (d/entity db (get all-idents k k))]
+              (if-let [ent (d/entity db (get ident-overrides k k))]
                 (do
                   (when (not= (select-keys ent [:logseq.property/type :db/cardinality])
                               (select-keys v [:logseq.property/type :db/cardinality]))
@@ -1270,10 +1270,6 @@
               pages-and-blocks)
         ident-overrides (import-ident-overrides db (vals existing-page-entities)
                                                 properties import-options)
-        build-options (cond-> export-map
-                        (seq ident-overrides)
-                        (assoc ::sqlite-build/ident-overrides ident-overrides))
-        all-idents (sqlite-build/create-all-idents properties classes build-options)
         export-map
         (cond-> {:build-existing-tx? true
                  :extract-content-refs? false}
@@ -1284,18 +1280,18 @@
                  (mapv (fn [m]
                          (update m :page (partial add-uuid-to-page-if-exists
                                                   db import-to-existing-page-uuids
-                                                  existing-page-entities all-idents import-options)))
+                                                  existing-page-entities ident-overrides import-options)))
                        pages-and-blocks))
           (seq classes)
           (assoc :classes
                  (->> classes
                       (map (fn [[k v]]
-                             (if-let [ent (d/entity db (get all-idents k k))]
+                             (if-let [ent (d/entity db k)]
                                [k (assoc v :block/uuid (:block/uuid ent))]
                                [k v])))
                       (into {})))
           (seq properties)
-          (assoc :properties (update-existing-properties db property-conflicts all-idents properties))
+          (assoc :properties (update-existing-properties db property-conflicts ident-overrides properties))
           ;; Graph exports don't use :build/page so this speeds up build
           (#{:graph :graph-human} export-type)
           (assoc :translate-property-values? false)
@@ -1309,7 +1305,7 @@
                                          [:build/page
                                           (add-uuid-to-page-if-exists
                                            db import-to-existing-page-uuids existing-page-entities
-                                           all-idents import-options (second f))]
+                                           ident-overrides import-options (second f))]
                                          f))
                                      export-map))
         ;; Update uuid references of all pages that had their uuids updated to reference an existing page

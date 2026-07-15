@@ -10,6 +10,7 @@
             [logseq.common.util.page-ref :as page-ref]
             [logseq.common.uuid :as common-uuid]
             [logseq.db :as ldb]
+            [logseq.db.frontend.db-ident :as db-ident]
             [logseq.db.frontend.schema :as db-schema]
             [logseq.db.frontend.validate :as db-validate]
             [logseq.db.sqlite.create-graph :as sqlite-create-graph]
@@ -1412,6 +1413,19 @@
                                 :import-edn-data? true}
                                {:logseq.property/description "first description"
                                 :logseq.property/exclude-from-graph-view true})))
+
+(deftest build-import-queries-existing-properties-by-imported-ident
+  (let [property-ident :user.property/existing
+        conn (db-test/create-conn-with-blocks
+              {:properties {property-ident {:logseq.property/type :default}}})]
+    (with-redefs [db-ident/create-db-ident-from-name
+                  (fn [property-namespace property-name]
+                    (keyword property-namespace (str property-name "-new")))]
+      (let [result (sqlite-export/build-import
+                    {:properties {property-ident {:logseq.property/type :number}}}
+                    @conn
+                    {})]
+        (is (string/includes? (:error result) (str property-ident)))))))
 
 (deftest build-import-preserves-existing-page-properties
   (let [existing-text-ident :user.property/existing-text-source
