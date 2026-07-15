@@ -662,6 +662,16 @@
     (is (string/includes? (:error invalid-type-result) ":block/collapsed?"))
     (is (string/includes? (:error invalid-type-result) "should be a boolean"))))
 
+(deftest import-edn-data-rejects-unsupported-export-metadata
+  (let [unsupported-key :logseq.db.sqlite.export/unsupported
+        conn (sqlite-export/create-conn)
+        result (sqlite-export/build-import
+                {:pages-and-blocks [{:page {:block/title "Valid page"}}]
+                 unsupported-key true}
+                @conn
+                {:import-edn-data? true})]
+    (is (string/includes? (:error result) (str unsupported-key)))))
+
 (deftest graph-export-keeps-referenced-recycled-closed-value-config
   (let [property-id :plugin.property.degrande-colors/tldraw
         closed-value-uuid (random-uuid)

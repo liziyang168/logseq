@@ -1388,6 +1388,18 @@
    :block-props-tx []
    :misc-tx []})
 
+(def ^:private supported-export-metadata-keys
+  #{::auto-include-namespaces ::block ::export-type ::graph-files ::graph-format
+    ::import-options ::kv-values ::property-history ::schema-version})
+
+(defn- unsupported-export-metadata-keys
+  [export-map]
+  (->> (keys export-map)
+       (filter #(= "logseq.db.sqlite.export" (namespace %)))
+       (remove supported-export-metadata-keys)
+       sort
+       vec))
+
 (defn build-import
   "Given an export map, build the import tx to create it. In addition to standard sqlite.build keys,
    an export map can have the following namespaced keys:
@@ -1405,9 +1417,14 @@
    This fn then returns a map of txs to transact with the following keys:
    * :init-tx - Txs that must be transacted first, usually because they define new properties
    * :block-props-tx - Txs to transact after :init-tx, usually because they use newly defined properties
-   * :misc-tx - Txs to transact unrelated to other txs"
+  * :misc-tx - Txs to transact unrelated to other txs"
   [export-map* db {:keys [current-block] :as import-options}]
   (cond
+    (and (:import-edn-data? import-options)
+         (seq (unsupported-export-metadata-keys export-map*)))
+    {:error (str "The imported EDN contains unsupported field(s): "
+                 (pr-str (unsupported-export-metadata-keys export-map*)))}
+
     (datom-export? export-map*)
     (build-datom-import export-map* db)
 
